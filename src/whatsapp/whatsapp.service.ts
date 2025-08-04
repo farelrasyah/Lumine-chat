@@ -37,21 +37,44 @@ export class WhatsAppService implements OnModuleInit {
     });
     this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
-      for (const msg of messages) {
-        if (!msg.message) continue;
+      // Proses semua pesan secara paralel
+      await Promise.all(messages.map(async (msg) => {
+        if (!msg.message) return;
         // Only process text messages from chats (not status/broadcast)
         if ((msg.message.conversation || msg.message.extendedTextMessage) && msg.key.remoteJid && !msg.key.remoteJid.endsWith('@broadcast')) {
           await this.handleIncomingMessage(msg);
         }
-      }
+      }));
     });
   }
 
   async handleIncomingMessage(msg: any) {
     try {
-      const { reply, log } = await this.messageProcessor.processMessage(msg);
+      let typingSent = false;
+      let typingMsg;
+      let typingTimeout: NodeJS.Timeout | undefined;
+      // Mulai proses AI dan timeout bersamaan
+      const aiPromise = this.messageProcessor.processMessage(msg);
+      const timeoutPromise = new Promise<void>(resolve => {
+        typingTimeout = setTimeout(async () => {
+          typingSent = true;
+          typingMsg = await this.sock.sendMessage(msg.key.remoteJid, { text: 'Lumine sedang menyiapkan jawabannya...' }, { quoted: msg });
+          resolve();
+        }, 1500);
+      });
+      // Tunggu mana yang lebih dulu selesai: AI atau timeout
+      const result = await Promise.race([aiPromise.then(() => 'ai'), timeoutPromise.then(() => 'timeout')]);
+      let reply, log;
+      if (result === 'ai') {
+        // AI selesai duluan, batalkan timeout
+        if (typingTimeout) clearTimeout(typingTimeout);
+        ({ reply, log } = await aiPromise);
+      } else {
+        // Timeout duluan, tunggu AI selesai
+        ({ reply, log } = await aiPromise);
+      }
       if (reply) {
-        await this.sendMessage(msg.key.remoteJid, reply, msg);
+        await this.sock.sendMessage(msg.key.remoteJid, { text: reply }, { quoted: msg });
         this.logger.log(log);
       }
     } catch (e) {
@@ -61,10 +84,7 @@ export class WhatsAppService implements OnModuleInit {
   }
 
   async sendMessage(jid: string, text: string, msg: any) {
-    // Split message if >1600 chars
-    const chunks = text.match(/(.|\s){1,1600}/g) || [];
-    for (const chunk of chunks) {
-      await this.sock.sendMessage(jid, { text: chunk }, { quoted: msg });
-    }
+    // Kirim jawaban dalam satu bubble, apapun panjangnya
+    await this.sock.sendMessage(jid, { text }, { quoted: msg });
   }
 }

@@ -21,9 +21,11 @@ export class MessageProcessorService {
     if (!prompt) return { reply: null, log: '' };
     try {
       const aiResponse = await this.queryAI(prompt);
-      this.history.push({ prompt, response: aiResponse });
-      this.logger.log(`Q: ${prompt}\nA: ${aiResponse}`);
-      return { reply: aiResponse, log: `Q: ${prompt}\nA: ${aiResponse}` };
+      // Bersihkan simbol markdown
+      const cleanResponse = this.stripMarkdown(aiResponse);
+      this.history.push({ prompt, response: cleanResponse });
+      this.logger.log(`Q: ${prompt}\nA: ${cleanResponse}`);
+      return { reply: cleanResponse, log: `Q: ${prompt}\nA: ${cleanResponse}` };
     } catch (e: any) {
       if (e.response && e.response.status === 400) {
         this.logger.error(`AI error (400): ${JSON.stringify(e.response.data)}`);
@@ -66,5 +68,27 @@ export class MessageProcessorService {
 
   getHistory() {
     return this.history;
+  }
+
+  /**
+   * Menghapus simbol markdown dari teks.
+   */
+  stripMarkdown(text: string): string {
+    if (!text) return '';
+    // Hapus seluruh simbol markdown dan karakter dekoratif
+    return text
+      // Hapus seluruh *, **, _, __, ~~, `, >, | secara global
+      .replace(/\*\*|\*|__|_|~~|`|>|\|/g, '')
+      // Hilangkan link markdown [teks](url)
+      .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+      // Hilangkan gambar markdown ![alt](img)
+      .replace(/\!\[([^\]]*)\]\([^\)]+\)/g, '$1')
+      // Hilangkan heading markdown
+      .replace(/#+\s/g, '')
+      // Hilangkan escape backslash
+      .replace(/\\/g, '')
+      // Normalisasi newline
+      .replace(/\r?\n/g, '\n')
+      .trim();
   }
 }
