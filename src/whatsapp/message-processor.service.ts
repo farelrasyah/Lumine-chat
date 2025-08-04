@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
+import * as dotenv from 'dotenv';
+dotenv.config();
 
-const AI_API_KEY = 'AIzaSyC8JvJGc1162kZKcrcddWLkusjb6XH7wtM';
+const AI_API_KEY = process.env.AI_API_KEY;
 const AI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent';
 
 @Injectable()
