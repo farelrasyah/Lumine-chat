@@ -7,10 +7,18 @@ dotenv.config();
 const AI_API_KEY = process.env.AI_API_KEY;
 const AI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent';
 
+import { ParserService } from '../parser/parser.service';
+import { SheetService } from '../sheet/sheet.service';
+
 @Injectable()
 export class MessageProcessorService {
   private readonly logger = new Logger(MessageProcessorService.name);
   private history: Array<{ prompt: string; response: string }> = [];
+
+  constructor(
+    private readonly parserService: ParserService,
+    private readonly sheetService: SheetService,
+  ) {}
 
   async processMessage(msg: any): Promise<{ reply: string | null; log: string }> {
     const text = this.extractText(msg);
@@ -20,6 +28,26 @@ export class MessageProcessorService {
     // Remove @lumine (case-insensitive, only 1st occurrence)
     const prompt = text.replace(/@lumine\b/i, '').trim();
     if (!prompt) return { reply: null, log: '' };
+
+    // Ambil nama pengirim WA jika ada (misal dari msg.notify atau msg.pushName)
+    const pengirim = msg.notify || msg.pushName || msg.sender?.name || 'unknown';
+
+    // --- Integrasi parser & sheet ---
+    const parsed = this.parserService.parseMessage(prompt, pengirim);
+    if (parsed && parsed.nominal && parsed.nominal > 0) {
+      // Catat ke Google Sheets
+      const ok = await this.sheetService.appendTransaction(parsed);
+      if (ok) {
+        const reply = `📝 Dicatat: ${parsed.deskripsi} - Rp${parsed.nominal.toLocaleString('id-ID')}` +
+          `\n📅 ${parsed.tanggal} ⏰ ${parsed.waktu}` +
+          `\n📂 Kategori: ${parsed.kategori}`;
+        this.logger.log(`Transaksi dicatat: ${JSON.stringify(parsed)}`);
+        return { reply, log: JSON.stringify(parsed) };
+      } else {
+        return { reply: 'Gagal mencatat transaksi ke Google Sheets.', log: 'Sheet error' };
+      }
+    }
+    // --- Jika bukan transaksi, lanjutkan ke AI ---
 
     // Ambil nomor user (misal dari msg.key.remoteJid, sesuaikan dengan struktur msg Anda)
     const userNumber = msg.key?.remoteJid || msg.from || 'unknown';
