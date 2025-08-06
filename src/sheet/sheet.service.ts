@@ -33,6 +33,7 @@ export class SheetService {
 
   async appendTransaction(data: {
     tanggal: string;
+    tanggalDisplay?: string;
     waktu: string;
     deskripsi: string;
     nominal: number;
@@ -41,7 +42,7 @@ export class SheetService {
   }): Promise<boolean> {
     try {
       const values = [[
-        data.tanggal,
+        data.tanggalDisplay || data.tanggal, // Gunakan tanggalDisplay (DD/MM/YYYY) untuk Google Sheets, fallback ke tanggal ISO
         data.waktu,
         data.deskripsi,
         data.nominal,

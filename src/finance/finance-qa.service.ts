@@ -146,44 +146,60 @@ export class FinanceQAService {
   }
 
   private getDateRange(timeRange: string): { startDate: string; endDate: string } {
+    // Use local timezone to avoid timezone issues
     const today = new Date();
-    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth() + 1; // Convert to 1-based (1 = January, 8 = August)
+    const currentDate = today.getDate();
+    
+    this.logger.log(`Current date: ${today.toISOString()}, Year: ${currentYear}, Month: ${currentMonth}, Date: ${currentDate}, timeRange: ${timeRange}`);
     
     switch (timeRange) {
       case 'today':
+        const todayFormatted = this.formatDateLocal(currentYear, currentMonth, currentDate);
         return {
-          startDate: this.formatDate(startOfToday),
-          endDate: this.formatDate(today)
+          startDate: todayFormatted,
+          endDate: todayFormatted
         };
         
       case 'yesterday':
-        const yesterday = new Date(startOfToday);
-        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayDate = new Date(today);
+        yesterdayDate.setDate(today.getDate() - 1);
+        const yesterdayFormatted = this.formatDateLocal(yesterdayDate.getFullYear(), yesterdayDate.getMonth() + 1, yesterdayDate.getDate());
         return {
-          startDate: this.formatDate(yesterday),
-          endDate: this.formatDate(yesterday)
+          startDate: yesterdayFormatted,
+          endDate: yesterdayFormatted
         };
         
       case 'thisWeek':
-        const startOfWeek = new Date(startOfToday);
-        startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+        const startOfWeekDate = new Date(today);
+        startOfWeekDate.setDate(today.getDate() - today.getDay());
+        const startOfWeekFormatted = this.formatDateLocal(startOfWeekDate.getFullYear(), startOfWeekDate.getMonth() + 1, startOfWeekDate.getDate());
+        const endOfWeekFormatted = this.formatDateLocal(currentYear, currentMonth, currentDate);
         return {
-          startDate: this.formatDate(startOfWeek),
-          endDate: this.formatDate(today)
+          startDate: startOfWeekFormatted,
+          endDate: endOfWeekFormatted
         };
         
       case 'thisMonth':
-        const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-        return {
-          startDate: this.formatDate(startOfMonth),
-          endDate: this.formatDate(today)
+        // currentMonth is already 1-based (8 for August)
+        const startOfMonth = this.formatDateLocal(currentYear, currentMonth, 1);
+        // Get last day of the month using 0-based month for Date constructor
+        const daysInMonth = new Date(currentYear, currentMonth, 0).getDate();
+        const endOfMonth = this.formatDateLocal(currentYear, currentMonth, daysInMonth);
+        const result = {
+          startDate: startOfMonth,
+          endDate: endOfMonth
         };
+        this.logger.log(`thisMonth range calculated: ${JSON.stringify(result)} (Year: ${currentYear}, Month: ${currentMonth}, DaysInMonth: ${daysInMonth})`);
+        return result;
         
       case 'thisYear':
-        const startOfYear = new Date(today.getFullYear(), 0, 1);
+        const startOfYear = this.formatDateLocal(currentYear, 1, 1);
+        const endOfYear = this.formatDateLocal(currentYear, 12, 31);
         return {
-          startDate: this.formatDate(startOfYear),
-          endDate: this.formatDate(today)
+          startDate: startOfYear,
+          endDate: endOfYear
         };
         
       default:
@@ -198,33 +214,207 @@ export class FinanceQAService {
     return date.toISOString().split('T')[0];
   }
 
+  private formatDateLocal(year: number, month: number, day: number): string {
+    // Format tanggal lokal tanpa masalah timezone
+    const paddedMonth = String(month).padStart(2, '0');
+    const paddedDay = String(day).padStart(2, '0');
+    return `${year}-${paddedMonth}-${paddedDay}`;
+  }
+
+  private formatDateForDisplay(isoDateString: string): string {
+    // Konversi dari YYYY-MM-DD ke DD/MM/YYYY untuk tampilan
+    const [year, month, day] = isoDateString.split('-');
+    return `${day}/${month}/${year}`;
+  }
+
   private formatRupiah(amount: number): string {
     return `Rp ${amount.toLocaleString('id-ID')}`;
+  }
+
+  private normalizeUserName(pengirim: string): string {
+    // Clean and normalize the username
+    let normalized = pengirim.trim();
+    
+    // Remove extra spaces
+    normalized = normalized.replace(/\s+/g, ' ');
+    
+    // Return the cleaned version without hardcoded assumptions
+    return normalized;
+  }
+
+  private async tryDifferentPengirimVariations(originalPengirim: string, startDate?: string, endDate?: string) {
+    // First normalize the pengirim
+    const normalizedPengirim = this.normalizeUserName(originalPengirim);
+    
+    // Generate variations dynamically based on the input
+    const variations = [
+      normalizedPengirim,
+      originalPengirim,
+    ];
+    
+    // Add first name variation
+    const firstName = originalPengirim.split(' ')[0];
+    if (firstName && firstName !== originalPengirim) {
+      variations.push(firstName);
+    }
+    
+    // Add last name variation
+    const lastName = originalPengirim.split(' ').pop();
+    if (lastName && lastName !== originalPengirim && lastName !== firstName) {
+      variations.push(lastName);
+    }
+    
+    // Remove duplicates
+    const uniqueVariations = [...new Set(variations)];
+    
+    this.logger.log(`Testing pengirim variations: ${JSON.stringify(uniqueVariations)}`);
+    
+    // First, let's check what data exists for this pengirim without date filter for debugging
+    this.logger.log(`Checking all data for pengirim variations...`);
+    for (const variation of uniqueVariations.slice(0, 2)) { // Only check first 2 to avoid spam
+      const allData = await SupabaseService.debugAllTransactions(variation);
+      if (allData.length > 0) {
+        this.logger.log(`Found ALL DATA for pengirim "${variation}": ${allData.length} transactions`);
+        this.logger.log(`Sample transaction:`, allData[0]);
+      }
+    }
+    
+    // Now try with date filter
+    for (const variation of uniqueVariations) {
+      this.logger.log(`Trying with pengirim variation: "${variation}", startDate: "${startDate}", endDate: "${endDate}"`);
+      const summary = await SupabaseService.getTransactionSummaryByCategory(
+        variation,
+        startDate,
+        endDate
+      );
+      if (Object.keys(summary).length > 0) {
+        this.logger.log(`✅ Found data with variation: "${variation}"`);
+        return summary;
+      } else {
+        this.logger.log(`❌ No data found with variation: "${variation}"`);
+      }
+    }
+    
+    // If still no data found, try fuzzy matching with existing pengirim values
+    this.logger.log(`No exact match found. Trying fuzzy matching...`);
+    const allPengirimValues = await SupabaseService.getAllUniquePengirimValues();
+    const fuzzyMatches = this.findFuzzyMatches(originalPengirim, allPengirimValues);
+    
+    for (const fuzzyMatch of fuzzyMatches) {
+      this.logger.log(`Trying fuzzy match: "${fuzzyMatch}"`);
+      const summary = await SupabaseService.getTransactionSummaryByCategory(
+        fuzzyMatch,
+        startDate,
+        endDate
+      );
+      if (Object.keys(summary).length > 0) {
+        this.logger.log(`✅ Found data with fuzzy match: "${fuzzyMatch}"`);
+        return summary;
+      }
+    }
+    
+    // If still no data found, try without date filter
+    this.logger.log(`No data found with date filter. Trying without date filter...`);
+    for (const variation of uniqueVariations) {
+      const summary = await SupabaseService.getTransactionSummaryByCategory(variation);
+      if (Object.keys(summary).length > 0) {
+        this.logger.log(`Found data without date filter for variation: "${variation}"`);
+        return summary;
+      }
+    }
+    
+    // Debug: Try to get ALL transactions without any filter to see if table is empty
+    this.logger.log(`Testing if transactions table has any data at all...`);
+    try {
+      const allUnique = await SupabaseService.getAllUniquePengirimValues();
+      this.logger.log(`All unique pengirim values found: ${JSON.stringify(allUnique)}`);
+      
+      if (allUnique.length > 0) {
+        this.logger.log(`Database has data but no match found for user variations: ${JSON.stringify(uniqueVariations)}`);
+        // Try with the first available pengirim as test
+        const testSummary = await SupabaseService.getTransactionSummaryByCategory(allUnique[0]);
+        this.logger.log(`Test query with "${allUnique[0]}" returns:`, testSummary);
+      } else {
+        this.logger.log(`Database appears to be empty or connection issue`);
+      }
+    } catch (error) {
+      this.logger.error(`Error testing database:`, error);
+    }
+    
+    return {};
+  }
+
+  private findFuzzyMatches(input: string, candidates: string[]): string[] {
+    const normalizedInput = input.toLowerCase().trim();
+    const matches: string[] = [];
+    
+    for (const candidate of candidates) {
+      const normalizedCandidate = candidate.toLowerCase().trim();
+      
+      // Check if candidate contains any word from input
+      const inputWords = normalizedInput.split(/\s+/);
+      const candidateWords = normalizedCandidate.split(/\s+/);
+      
+      const hasCommonWord = inputWords.some(inputWord => 
+        candidateWords.some(candidateWord => 
+          candidateWord.includes(inputWord) || inputWord.includes(candidateWord)
+        )
+      );
+      
+      if (hasCommonWord) {
+        matches.push(candidate);
+      }
+    }
+    
+    return matches.slice(0, 3); // Limit to top 3 matches
   }
 
   private async handleTotalQuery(query: FinanceQuery): Promise<string> {
     const { startDate, endDate } = query.timeRange ? this.getDateRange(query.timeRange) : { startDate: '', endDate: '' };
     
-    const total = await SupabaseService.getTotalTransactions(
-      query.pengirim,
+    this.logger.log(`Getting total transactions for original pengirim: "${query.pengirim}", normalized: "${this.normalizeUserName(query.pengirim)}", startDate: "${startDate}", endDate: "${endDate}"`);
+    
+    // Try different variations of pengirim name
+    const categorySummary = await this.tryDifferentPengirimVariations(
+      this.normalizeUserName(query.pengirim),
       startDate || undefined,
       endDate || undefined
     );
 
-    if (total === 0) {
+    this.logger.log(`Category summary found:`, categorySummary);
+
+    if (Object.keys(categorySummary).length === 0) {
       const periode = this.getTimeRangeText(query.timeRange);
       return `📊 Belum ada transaksi yang tercatat${periode ? ` ${periode}` : ''}.`;
     }
 
+    // Build response with category breakdown
     const periode = this.getTimeRangeText(query.timeRange);
-    return `💸 Total pengeluaran${periode ? ` ${periode}` : ''}: **${this.formatRupiah(total)}**`;
+    let response = `� Pengeluaran${periode ? ` ${periode}` : ''}:\n\n`;
+    
+    let totalKeseluruhan = 0;
+    
+    // Sort categories and display
+    Object.entries(categorySummary)
+      .sort(([,a], [,b]) => b - a) // Sort by amount descending
+      .forEach(([kategori, amount]) => {
+        const emoji = this.getCategoryEmoji(kategori);
+        response += `${emoji} ${kategori}: ${this.formatRupiah(amount)}\n`;
+        totalKeseluruhan += amount;
+      });
+    
+    response += `\n💰 Total: ${this.formatRupiah(totalKeseluruhan)}`;
+    
+    return response;
   }
 
   private async handleCategoryQuery(query: FinanceQuery): Promise<string> {
     const { startDate, endDate } = query.timeRange ? this.getDateRange(query.timeRange) : { startDate: '', endDate: '' };
     
+    const normalizedPengirim = this.normalizeUserName(query.pengirim);
+    
     const total = await SupabaseService.getTotalTransactions(
-      query.pengirim,
+      normalizedPengirim,
       startDate || undefined,
       endDate || undefined,
       query.kategori
@@ -241,20 +431,23 @@ export class FinanceQAService {
   }
 
   private async handleLastTransactionQuery(query: FinanceQuery): Promise<string> {
-    const transaction = await SupabaseService.getLastTransaction(query.pengirim);
+    const normalizedPengirim = this.normalizeUserName(query.pengirim);
+    const transaction = await SupabaseService.getLastTransaction(normalizedPengirim);
     
     if (!transaction) {
       return `🕒 Belum ada transaksi yang tercatat.`;
     }
 
-    return `🕒 Transaksi terakhir kamu: *${transaction.deskripsi}* seharga **${this.formatRupiah(transaction.nominal)}**`;
+    const formattedDate = this.formatDateForDisplay(transaction.tanggal);
+    return `🕒 Transaksi terakhir kamu: *${transaction.deskripsi}* seharga **${this.formatRupiah(transaction.nominal)}** pada ${formattedDate}`;
   }
 
   private async handleBiggestTransactionQuery(query: FinanceQuery): Promise<string> {
     const { startDate, endDate } = query.timeRange ? this.getDateRange(query.timeRange) : { startDate: '', endDate: '' };
     
+    const normalizedPengirim = this.normalizeUserName(query.pengirim);
     const transaction = await SupabaseService.getBiggestTransaction(
-      query.pengirim,
+      normalizedPengirim,
       startDate || undefined,
       endDate || undefined
     );
@@ -265,14 +458,16 @@ export class FinanceQAService {
     }
 
     const periode = this.getTimeRangeText(query.timeRange);
-    return `💥 Pengeluaran terbesar${periode ? ` ${periode}` : ''}: *${transaction.deskripsi}* sebesar **${this.formatRupiah(transaction.nominal)}**`;
+    const formattedDate = this.formatDateForDisplay(transaction.tanggal);
+    return `💥 Pengeluaran terbesar${periode ? ` ${periode}` : ''}: *${transaction.deskripsi}* sebesar **${this.formatRupiah(transaction.nominal)}** pada ${formattedDate}`;
   }
 
   private async handleHistoryQuery(query: FinanceQuery): Promise<string> {
     const { startDate, endDate } = query.timeRange ? this.getDateRange(query.timeRange) : { startDate: '', endDate: '' };
     
+    const normalizedPengirim = this.normalizeUserName(query.pengirim);
     const transactions = await SupabaseService.getTransactionHistory(
-      query.pengirim,
+      normalizedPengirim,
       startDate || undefined,
       endDate || undefined,
       5
@@ -287,7 +482,8 @@ export class FinanceQAService {
     let response = `🧾 Riwayat${periode ? ` ${periode}` : ''}:\n\n`;
     
     transactions.forEach((transaction) => {
-      response += `• ${transaction.deskripsi}: ${this.formatRupiah(transaction.nominal)}\n`;
+      const formattedDate = this.formatDateForDisplay(transaction.tanggal);
+      response += `• ${transaction.deskripsi}: ${this.formatRupiah(transaction.nominal)} (${formattedDate})\n`;
     });
 
     return response.trim();
@@ -321,10 +517,19 @@ export class FinanceQAService {
       'kesehatan': '🏥',
       'pendidikan': '📚',
       'utilitas': '⚡',
-      'lainnya': '📂'
+      'lainnya': '📂',
+      // Add variations of category names that might be in database
+      'Lainnya': '📂',
+      'Makanan': '🍔',
+      'Transportasi': '🚗',
+      'Belanja': '🛍️',
+      'Hiburan': '🎮',
+      'Kesehatan': '🏥',
+      'Pendidikan': '📚',
+      'Utilitas': '⚡'
     };
 
-    return emojiMap[kategori.toLowerCase()] || '📂';
+    return emojiMap[kategori] || '📂';
   }
 
   isFinanceQuestion(question: string): boolean {

@@ -45,10 +45,14 @@ export class ParserService {
       }
       if (kategori !== 'Lainnya') break;
     }
-    const tanggal = dayjs().format('DD/MM/YYYY');
+    // Format tanggal untuk display di WhatsApp
+    const tanggalDisplay = dayjs().format('DD/MM/YYYY');
+    // Format tanggal untuk database (ISO format YYYY-MM-DD)
+    const tanggalDB = dayjs().format('YYYY-MM-DD');
     const waktu = dayjs().format('HH:mm');
     return {
-      tanggal,
+      tanggal: tanggalDB, // Simpan format ISO ke database
+      tanggalDisplay, // Format tampilan untuk WhatsApp
       waktu,
       deskripsi,
       nominal,

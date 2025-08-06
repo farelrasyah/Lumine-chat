@@ -33,6 +33,9 @@ export class MessageProcessorService {
 
     // Ambil nama pengirim WA jika ada (misal dari msg.notify atau msg.pushName)
     const pengirim = msg.notify || msg.pushName || msg.sender?.name || 'unknown';
+    
+    this.logger.log(`DEBUG: Pengirim detected: "${pengirim}"`);
+    this.logger.log(`DEBUG: Message details - notify: "${msg.notify}", pushName: "${msg.pushName}", sender.name: "${msg.sender?.name}"`);
 
     // --- Integrasi parser, Supabase & Google Sheets ---
     const parsed = this.parserService.parseMessage(prompt, pengirim);
@@ -65,7 +68,7 @@ export class MessageProcessorService {
       // Balasan sukses/gagal
       if (!supabaseError && !sheetError) {
         const reply = `📝 Dicatat: ${parsed.deskripsi} - Rp${parsed.nominal.toLocaleString('id-ID')}` +
-          `\n📅 ${parsed.tanggal} ⏰ ${parsed.waktu}` +
+          `\n📅 ${parsed.tanggalDisplay || parsed.tanggal} ⏰ ${parsed.waktu}` +
           `\n📂 Kategori: ${parsed.kategori}`;
         this.logger.log(`Transaksi dicatat ke Supabase & Google Sheets: ${JSON.stringify(parsed)}`);
         return { reply, log: JSON.stringify(parsed) };
