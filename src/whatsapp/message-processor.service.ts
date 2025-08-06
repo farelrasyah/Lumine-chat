@@ -9,6 +9,7 @@ const AI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemi
 
 import { ParserService } from '../parser/parser.service';
 import { SheetService } from '../sheet/sheet.service';
+import { FinanceQAService } from '../finance/finance-qa.service';
 
 @Injectable()
 export class MessageProcessorService {
@@ -18,6 +19,7 @@ export class MessageProcessorService {
   constructor(
     private readonly parserService: ParserService,
     private readonly sheetService: SheetService,
+    private readonly financeQAService: FinanceQAService,
   ) {}
 
   async processMessage(msg: any): Promise<{ reply: string | null; log: string }> {
@@ -98,6 +100,24 @@ export class MessageProcessorService {
         this.history.push({ prompt, response: personalReply });
         this.logger.log(`Q: ${prompt}\nA: ${personalReply}`);
         return { reply: personalReply, log: `Q: ${prompt}\nA: ${personalReply}` };
+      }
+
+      // === FITUR TANYA JAWAB KEUANGAN ===
+      if (this.financeQAService.isFinanceQuestion(prompt)) {
+        try {
+          const financeResponse = await this.financeQAService.processFinanceQuestion(prompt, pengirim);
+          if (financeResponse) {
+            await SupabaseService.saveMessage(userNumber, 'assistant', financeResponse);
+            this.history.push({ prompt, response: financeResponse });
+            this.logger.log(`Finance Q: ${prompt}\nA: ${financeResponse}`);
+            return { reply: financeResponse, log: `Finance Q: ${prompt}\nA: ${financeResponse}` };
+          }
+        } catch (error) {
+          this.logger.error('Error processing finance question:', error);
+          const errorReply = 'Maaf, terjadi kesalahan saat mengakses data keuangan Anda.';
+          await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
+          return { reply: errorReply, log: `Finance Error: ${error}` };
+        }
       }
 
       // Kirim konteks chat ke AI

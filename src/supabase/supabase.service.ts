@@ -61,4 +61,112 @@ export class SupabaseService {
     if (error) throw error;
     return data || [];
   }
+
+  // === FITUR QUERY KEUANGAN ===
+
+  static async getTotalTransactions(pengirim: string, startDate?: string, endDate?: string, kategori?: string) {
+    const client = this.getClient();
+    let query = client
+      .from('transactions')
+      .select('nominal')
+      .eq('pengirim', pengirim);
+
+    if (startDate) {
+      query = query.gte('tanggal', startDate);
+    }
+    if (endDate) {
+      query = query.lte('tanggal', endDate);
+    }
+    if (kategori) {
+      query = query.ilike('kategori', `%${kategori}%`);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    
+    const total = data?.reduce((sum, transaction) => sum + transaction.nominal, 0) || 0;
+    return total;
+  }
+
+  static async getLastTransaction(pengirim: string) {
+    const client = this.getClient();
+    const { data, error } = await client
+      .from('transactions')
+      .select('*')
+      .eq('pengirim', pengirim)
+      .order('tanggal', { ascending: false })
+      .order('waktu', { ascending: false })
+      .limit(1);
+    
+    if (error) throw error;
+    return data?.[0] || null;
+  }
+
+  static async getBiggestTransaction(pengirim: string, startDate?: string, endDate?: string) {
+    const client = this.getClient();
+    let query = client
+      .from('transactions')
+      .select('*')
+      .eq('pengirim', pengirim);
+
+    if (startDate) {
+      query = query.gte('tanggal', startDate);
+    }
+    if (endDate) {
+      query = query.lte('tanggal', endDate);
+    }
+
+    const { data, error } = await query
+      .order('nominal', { ascending: false })
+      .limit(1);
+    
+    if (error) throw error;
+    return data?.[0] || null;
+  }
+
+  static async getTransactionHistory(pengirim: string, startDate?: string, endDate?: string, limit = 5) {
+    const client = this.getClient();
+    let query = client
+      .from('transactions')
+      .select('*')
+      .eq('pengirim', pengirim);
+
+    if (startDate) {
+      query = query.gte('tanggal', startDate);
+    }
+    if (endDate) {
+      query = query.lte('tanggal', endDate);
+    }
+
+    const { data, error } = await query
+      .order('tanggal', { ascending: false })
+      .order('waktu', { ascending: false })
+      .limit(limit);
+    
+    if (error) throw error;
+    return data || [];
+  }
+
+  static async getTransactionsByCategory(pengirim: string, kategori: string, startDate?: string, endDate?: string) {
+    const client = this.getClient();
+    let query = client
+      .from('transactions')
+      .select('*')
+      .eq('pengirim', pengirim)
+      .ilike('kategori', `%${kategori}%`);
+
+    if (startDate) {
+      query = query.gte('tanggal', startDate);
+    }
+    if (endDate) {
+      query = query.lte('tanggal', endDate);
+    }
+
+    const { data, error } = await query
+      .order('tanggal', { ascending: false })
+      .order('waktu', { ascending: false });
+    
+    if (error) throw error;
+    return data || [];
+  }
 }
