@@ -15,7 +15,8 @@ const SUPABASE_URL = process.env.SUPABASE_URL as string;
 const SUPABASE_KEY = process.env.SUPABASE_KEY as string;
 
 console.log('DEBUG SUPABASE_URL:', SUPABASE_URL);
-console.log('DEBUG SUPABASE_KEY:', SUPABASE_KEY);
+console.log('DEBUG SUPABASE_KEY length:', SUPABASE_KEY ? SUPABASE_KEY.length : 'undefined');
+console.log('DEBUG SUPABASE_KEY first 10 chars:', SUPABASE_KEY ? SUPABASE_KEY.substring(0, 10) + '...' : 'undefined');
 
 export class SupabaseService {
   private static client: SupabaseClient;
@@ -29,6 +30,8 @@ export class SupabaseService {
 
   static async saveTransaction(data: TransactionData) {
     const client = this.getClient();
+    console.log('DEBUG saveTransaction - Attempting to save:', data);
+    
     const { error } = await client.from('transactions').insert([
       {
         tanggal: data.tanggal,
@@ -40,7 +43,24 @@ export class SupabaseService {
         source: data.source || 'whatsapp',
       },
     ]);
-    if (error) throw error;
+    
+    console.log('DEBUG saveTransaction - Insert result, error:', error);
+    
+    if (error) {
+      console.error('DEBUG saveTransaction - Insert failed:', error);
+      throw error;
+    }
+    
+    // After successful insert, try to read back to verify
+    console.log('DEBUG saveTransaction - Verifying insert by reading back...');
+    const verification = await client
+      .from('transactions')
+      .select('*')
+      .eq('pengirim', data.pengirim)
+      .eq('deskripsi', data.deskripsi)
+      .limit(1);
+      
+    console.log('DEBUG saveTransaction - Verification read result:', verification);
   }
 
   static async saveMessage(userNumber: string, role: 'user' | 'assistant', content: string) {
@@ -242,6 +262,37 @@ export class SupabaseService {
     console.log('DEBUG Environment check - SUPABASE_URL:', SUPABASE_URL ? 'exists' : 'missing');
     console.log('DEBUG Environment check - SUPABASE_KEY:', SUPABASE_KEY ? 'exists' : 'missing');
     
+    // First, try to get ANY data from the table to verify table exists
+    console.log('DEBUG Testing table access with simple select...');
+    const testQuery = await client
+      .from('transactions')
+      .select('*')
+      .limit(5);
+    
+    console.log('DEBUG Simple test query result:', testQuery);
+    
+    // Try different possible table names
+    const possibleTableNames = ['transactions', 'transaction', 'Transactions', 'public.transactions'];
+    
+    for (const tableName of possibleTableNames) {
+      console.log(`DEBUG Testing table name: "${tableName}"`);
+      try {
+        const testResult = await client
+          .from(tableName)
+          .select('*')
+          .limit(1);
+        
+        console.log(`DEBUG Table "${tableName}" result:`, testResult);
+        
+        if (testResult.data && testResult.data.length > 0) {
+          console.log(`DEBUG Found data in table: "${tableName}"`);
+          break;
+        }
+      } catch (error) {
+        console.log(`DEBUG Error testing table "${tableName}":`, error);
+      }
+    }
+    
     const { data, error } = await client
       .from('transactions')
       .select('pengirim')
@@ -262,5 +313,67 @@ export class SupabaseService {
     console.log('DEBUG All unique pengirim values in database:', uniquePengirim);
     
     return uniquePengirim;
+  }
+
+  // Test function untuk debugging koneksi
+  static async testSupabaseConnection() {
+    console.log('=== TESTING SUPABASE CONNECTION ===');
+    const client = this.getClient();
+    
+    // Test 1: Simple ping
+    try {
+      console.log('Test 1: Basic connection test...');
+      const { data, error } = await client.from('transactions').select('count').limit(1);
+      console.log('Basic connection result:', { data, error });
+    } catch (err) {
+      console.error('Basic connection failed:', err);
+    }
+    
+    // Test 2: Check if table exists
+    try {
+      console.log('Test 2: Check table schema...');
+      const { data, error } = await client.rpc('version'); // Built-in function
+      console.log('Version check result:', { data, error });
+    } catch (err) {
+      console.error('Version check failed:', err);
+    }
+    
+    // Test 3: Try to create a test transaction
+    try {
+      console.log('Test 3: Insert test data...');
+      const testData = {
+        tanggal: '2025-08-06',
+        waktu: '14:00',
+        deskripsi: 'Test transaction',
+        nominal: 1000,
+        kategori: 'Test',
+        pengirim: 'farelrasyah | RPL A',
+        source: 'test'
+      };
+      
+      const insertResult = await client.from('transactions').insert([testData]);
+      console.log('Insert test result:', insertResult);
+      
+      // Try to read it back
+      const readResult = await client
+        .from('transactions')
+        .select('*')
+        .eq('deskripsi', 'Test transaction')
+        .limit(1);
+      console.log('Read test result:', readResult);
+      
+      // Clean up test data
+      if (readResult.data && readResult.data.length > 0) {
+        const deleteResult = await client
+          .from('transactions')
+          .delete()
+          .eq('deskripsi', 'Test transaction');
+        console.log('Cleanup test result:', deleteResult);
+      }
+    } catch (err) {
+      console.error('Insert/Read test failed:', err);
+    }
+    
+    console.log('=== END CONNECTION TEST ===');
   }
 }

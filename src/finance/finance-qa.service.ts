@@ -326,6 +326,11 @@ export class FinanceQAService {
     // Debug: Try to get ALL transactions without any filter to see if table is empty
     this.logger.log(`Testing if transactions table has any data at all...`);
     try {
+      // Test dengan SQL langsung
+      this.logger.log(`Testing with direct SQL query...`);
+      const directSQLTest = await SupabaseService.testSupabaseConnection();
+      this.logger.log(`Direct SQL test completed`);
+      
       const allUnique = await SupabaseService.getAllUniquePengirimValues();
       this.logger.log(`All unique pengirim values found: ${JSON.stringify(allUnique)}`);
       
