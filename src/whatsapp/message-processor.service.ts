@@ -32,19 +32,47 @@ export class MessageProcessorService {
     // Ambil nama pengirim WA jika ada (misal dari msg.notify atau msg.pushName)
     const pengirim = msg.notify || msg.pushName || msg.sender?.name || 'unknown';
 
-    // --- Integrasi parser & sheet ---
+    // --- Integrasi parser, Supabase & Google Sheets ---
     const parsed = this.parserService.parseMessage(prompt, pengirim);
     if (parsed && parsed.nominal && parsed.nominal > 0) {
-      // Catat ke Google Sheets
+      let supabaseError: any = null;
+      let sheetError: boolean = false;
+      // Simpan ke Supabase
+      try {
+        await SupabaseService.saveTransaction({
+          tanggal: parsed.tanggal,
+          waktu: parsed.waktu,
+          deskripsi: parsed.deskripsi,
+          nominal: parsed.nominal,
+          kategori: parsed.kategori,
+          pengirim: parsed.pengirim,
+          source: 'whatsapp',
+        });
+      } catch (e) {
+        supabaseError = e;
+        this.logger.error('Gagal mencatat transaksi ke Supabase', e);
+      }
+      // Simpan ke Google Sheets
+      let sheetErrorMsg = '';
       const ok = await this.sheetService.appendTransaction(parsed);
-      if (ok) {
+      if (!ok) {
+        sheetError = true;
+        sheetErrorMsg = 'Gagal mencatat transaksi ke Google Sheets. Cek kredensial, ID sheet, dan nama sheet.';
+        this.logger.error(sheetErrorMsg);
+      }
+      // Balasan sukses/gagal
+      if (!supabaseError && !sheetError) {
         const reply = `📝 Dicatat: ${parsed.deskripsi} - Rp${parsed.nominal.toLocaleString('id-ID')}` +
           `\n📅 ${parsed.tanggal} ⏰ ${parsed.waktu}` +
           `\n📂 Kategori: ${parsed.kategori}`;
-        this.logger.log(`Transaksi dicatat: ${JSON.stringify(parsed)}`);
+        this.logger.log(`Transaksi dicatat ke Supabase & Google Sheets: ${JSON.stringify(parsed)}`);
         return { reply, log: JSON.stringify(parsed) };
+      } else if (supabaseError && sheetError) {
+        return { reply: 'Gagal mencatat transaksi ke database & Google Sheets.', log: 'Supabase & Sheet error' };
+      } else if (supabaseError) {
+        return { reply: 'Gagal mencatat transaksi ke database, tapi berhasil di Google Sheets.', log: 'Supabase error' };
       } else {
-        return { reply: 'Gagal mencatat transaksi ke Google Sheets.', log: 'Sheet error' };
+        return { reply: `${sheetErrorMsg} Tapi berhasil di database.`, log: 'Sheet error' };
       }
     }
     // --- Jika bukan transaksi, lanjutkan ke AI ---

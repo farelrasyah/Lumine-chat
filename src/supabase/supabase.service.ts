@@ -1,3 +1,13 @@
+export interface TransactionData {
+  tanggal: string;
+  waktu: string;
+  deskripsi: string;
+  nominal: number;
+  kategori: string;
+  pengirim: string;
+  source?: string;
+}
+
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL as string;
@@ -14,6 +24,22 @@ export class SupabaseService {
       this.client = createClient(SUPABASE_URL, SUPABASE_KEY);
     }
     return this.client;
+  }
+
+  static async saveTransaction(data: TransactionData) {
+    const client = this.getClient();
+    const { error } = await client.from('transactions').insert([
+      {
+        tanggal: data.tanggal,
+        waktu: data.waktu,
+        deskripsi: data.deskripsi,
+        nominal: data.nominal,
+        kategori: data.kategori,
+        pengirim: data.pengirim,
+        source: data.source || 'whatsapp',
+      },
+    ]);
+    if (error) throw error;
   }
 
   static async saveMessage(userNumber: string, role: 'user' | 'assistant', content: string) {
