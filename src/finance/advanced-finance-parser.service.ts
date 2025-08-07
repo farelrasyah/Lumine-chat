@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { EnhancedDateService, TimeContext } from './enhanced-date.service';
 
 export interface AdvancedFinanceQuery {
-  intent: 'total' | 'category' | 'history' | 'comparison' | 'prediction' | 'budget' | 'pattern' | 'recommendation' | 'search' | 'goal' | 'reminder' | 'challenge' | 'simulation';
+  intent: 'total' | 'category' | 'history' | 'comparison' | 'prediction' | 'budget' | 'pattern' | 'recommendation' | 'search' | 'goal' | 'reminder' | 'challenge' | 'simulation' | 'hari_paling_boros';
   timeContext?: TimeContext;
   category?: string;
   comparisonType?: 'month-to-month' | 'week-to-week' | 'year-to-year';
@@ -159,6 +159,17 @@ export class AdvancedFinanceParserService {
       return {
         intent: 'simulation',
         simulationScenario: simulation,
+        pengirim,
+        rawQuery: message
+      };
+    }
+
+    // Intent: Hari Paling Boros
+    if (this.matchesHariPalingBoros(normalizedMessage)) {
+      const timeContext = this.dateService.parseTimeExpression(normalizedMessage);
+      return {
+        intent: 'hari_paling_boros',
+        timeContext: timeContext || undefined,
         pengirim,
         rawQuery: message
       };
@@ -438,6 +449,21 @@ export class AdvancedFinanceParserService {
     if (/juta|jt/i.test(text)) amount *= 1000000;
     
     return amount;
+  }
+
+  private matchesHariPalingBoros(text: string): boolean {
+    const patterns = [
+      /hari\s+(paling\s+)?(boros|besar|tinggi|mahal)/,
+      /hari\s+(ter)?(boros|mahal|tinggi)/,
+      /(paling\s+)?boros\s+hari/,
+      /hari\s+(dengan\s+)?pengeluaran\s+(paling\s+)?(besar|tinggi|banyak)/,
+      /hari\s+(yang\s+)?paling\s+(boros|mahal)/,
+      /kapan\s+(paling\s+)?(boros|mahal)/,
+      /tanggal\s+berapa\s+(paling\s+)?(boros|mahal)/,
+      /(paling\s+)?(boros|mahal)\s+tanggal\s+berapa/
+    ];
+
+    return patterns.some(pattern => pattern.test(text));
   }
 
   private extractDeadline(text: string): string | null {

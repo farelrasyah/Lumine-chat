@@ -772,6 +772,12 @@ export class MessageProcessorService {
       /^pengeluaran\s+(hari|minggu|bulan|tahun|kemarin|tadi|lalu|ini)/,
       /^pengeluaran\s+dari\s+/,
       
+      // ANALYTICAL PATTERNS - FIXED: Hari paling boros, trends, analytics
+      /hari\s+(paling\s+)?(boros|besar|tinggi|mahal)/,
+      /hari\s+(ter)?(boros|mahal|tinggi)/,
+      /(kapan|tanggal)\s+(paling\s+)?(boros|besar|mahal)/,
+      /(waktu|saat|periode)\s+(ter)?(boros|mahal)/,
+      
       // Pattern informational lainnya  
       /belanja\s+(apa|dimana|kapan)/,
       /beli\s+(apa|dimana|kapan)\s+(aja|saja)/,

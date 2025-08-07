@@ -182,7 +182,7 @@ Bot WhatsApp AI Lumine telah dilengkapi dengan sistem manajemen keuangan yang sa
 
 ### Deteksi Pengeluaran Tidak Biasa
 ```
-@lumine ada pengeluaran aneh ga?
+@lumine ada pengeluaran aneh ga? 
 @lumine transaksi tidak biasa bulan ini
 @lumine cek spending yang unusual
 ```
