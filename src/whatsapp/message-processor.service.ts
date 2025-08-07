@@ -316,7 +316,11 @@ export class MessageProcessorService {
       'budget', 'anggaran', 'batas', 'limit',
       'set batas', 'buat budget', 'atur anggaran',
       'status budget', 'cek budget', 'budget saya',
-      'saran budget', 'rekomendasi budget'
+      'saran budget', 'rekomendasi budget',
+      // DELETE BUDGET KEYWORDS
+      'hapus anggaran', 'hapus budget', 'hapus batas',
+      'batalkan anggaran', 'batalkan budget', 'batalkan batas',
+      'delete budget', 'remove budget', 'clear budget'
     ];
 
     const normalizedPrompt = prompt.toLowerCase();
@@ -329,8 +333,20 @@ export class MessageProcessorService {
       /anggaran\s+\w+\s+\d+/
     ];
     
+    // DELETE BUDGET PATTERNS
+    const budgetDeletePatterns = [
+      /hapus\s+(anggaran|budget|batas)/,
+      /batalkan\s+(anggaran|budget|batas)/,
+      /(delete|remove|clear)\s+budget/
+    ];
+    
     // Check explicit budget patterns first
     if (budgetSetPatterns.some(pattern => pattern.test(normalizedPrompt))) {
+      return true;
+    }
+    
+    // Check delete budget patterns
+    if (budgetDeletePatterns.some(pattern => pattern.test(normalizedPrompt))) {
       return true;
     }
     
@@ -343,6 +359,11 @@ export class MessageProcessorService {
    */
   private async handleBudgetCommand(prompt: string, pengirim: string): Promise<string | null> {
     const normalizedPrompt = prompt.toLowerCase();
+
+    // DELETE BUDGET COMMANDS
+    if (this.isBudgetDeleteCommand(normalizedPrompt)) {
+      return await this.handleBudgetDeleteCommand(prompt, pengirim);
+    }
 
     // SET/CREATE BUDGET COMMANDS
     if (this.isBudgetSetCommand(normalizedPrompt)) {
@@ -512,6 +533,133 @@ export class MessageProcessorService {
       'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
     ];
     return `${monthNames[parseInt(month) - 1]} ${year}`;
+  }
+
+  /**
+   * Check if this is a budget delete command
+   */
+  private isBudgetDeleteCommand(normalizedPrompt: string): boolean {
+    const deleteBudgetPatterns = [
+      /hapus\s+(anggaran|budget|batas)/,
+      /batalkan\s+(anggaran|budget|batas)/,
+      /(delete|remove|clear)\s+budget/,
+      /hapus.*budget/,
+      /hapus.*anggaran/,
+      /hapus.*batas/
+    ];
+    
+    return deleteBudgetPatterns.some(pattern => pattern.test(normalizedPrompt));
+  }
+
+  /**
+   * Handle budget delete commands
+   */
+  private async handleBudgetDeleteCommand(prompt: string, pengirim: string): Promise<string> {
+    try {
+      this.logger.log(`🗑️ Processing budget delete command: "${prompt}"`);
+      
+      // Parse delete information
+      const deleteInfo = this.parseBudgetDeleteCommand(prompt);
+      if (!deleteInfo) {
+        return `❌ Tidak bisa memahami perintah hapus budget. Gunakan format seperti:\n• "hapus anggaran makanan"\n• "hapus budget transportasi"\n• "batalkan batas pengeluaran makanan"\n• "hapus budget bulan ini" (hapus semua budget bulan ini)`;
+      }
+
+      // Get current month
+      const currentDate = new Date();
+      const bulan = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+
+      let deletedCount = 0;
+      let deletedCategories: string[] = [];
+
+      if (deleteInfo.deleteAll) {
+        // Delete all budgets for current month
+        const existingBudgets = await SupabaseService.getAllBudgets(pengirim, bulan);
+        deletedCategories = existingBudgets.map(b => b.kategori);
+        
+        if (existingBudgets.length > 0) {
+          await SupabaseService.deleteBudget(pengirim, undefined, bulan);
+          deletedCount = existingBudgets.length;
+        }
+      } else if (deleteInfo.kategori) {
+        // Delete specific category budget
+        const existingBudgets = await SupabaseService.getBudget(pengirim, deleteInfo.kategori, bulan);
+        
+        if (existingBudgets.length > 0) {
+          await SupabaseService.deleteBudget(pengirim, deleteInfo.kategori, bulan);
+          deletedCount = 1;
+          deletedCategories.push(deleteInfo.kategori);
+        }
+      }
+
+      // Generate response
+      if (deletedCount === 0) {
+        if (deleteInfo.deleteAll) {
+          return `❌ **Tidak ada budget yang ditemukan untuk dihapus di bulan ${this.formatBulanDisplay(bulan)}.**\n\nAnda belum mengatur budget untuk bulan ini.`;
+        } else {
+          return `❌ **Tidak ada budget untuk kategori "${deleteInfo.kategori}" di bulan ${this.formatBulanDisplay(bulan)}.**\n\nMungkin budget sudah dihapus sebelumnya atau belum pernah diatur.`;
+        }
+      } else {
+        this.logger.log(`✅ Successfully deleted ${deletedCount} budget(s) for ${pengirim}: ${deletedCategories.join(', ')}`);
+        
+        if (deleteInfo.deleteAll) {
+          return `✅ **Semua Budget Berhasil Dihapus!**\n\n🗓️ **Bulan:** ${this.formatBulanDisplay(bulan)}\n📂 **Kategori yang Dihapus:** ${deletedCategories.join(', ')}\n🗑️ **Total Dihapus:** ${deletedCount} budget\n\n💡 *Anda dapat mengatur budget baru kapan saja dengan perintah "budget [kategori] [nominal] per bulan"*`;
+        } else {
+          return `✅ **Budget Berhasil Dihapus!**\n\n💰 **Kategori:** ${deleteInfo.kategori}\n🗓️ **Bulan:** ${this.formatBulanDisplay(bulan)}\n🗑️ **Status:** Budget telah dihapus dari sistem\n\n💡 *Anda dapat mengatur budget baru untuk kategori ini kapan saja.*`;
+        }
+      }
+      
+    } catch (error) {
+      this.logger.error('Error deleting budget:', error);
+      return `❌ **Gagal menghapus budget!**\n\nTerjadi kesalahan sistem. Silakan coba lagi nanti.`;
+    }
+  }
+
+  /**
+   * Parse budget delete command to extract information
+   */
+  private parseBudgetDeleteCommand(prompt: string): { kategori?: string; deleteAll: boolean } | null {
+    const normalizedPrompt = prompt.toLowerCase().trim();
+    
+    // Check if user wants to delete all budgets
+    if (normalizedPrompt.includes('bulan ini') || normalizedPrompt.includes('semua') || normalizedPrompt.includes('all')) {
+      return { deleteAll: true };
+    }
+    
+    // Extract kategori using same logic as budget setting
+    let kategori: string | undefined;
+    const kategoriPatterns = [
+      { pattern: /(makanan|makan|food)/i, kategori: 'Makanan' },
+      { pattern: /(transport|transportasi|bensin|ojek|grab|taxi)/i, kategori: 'Transportasi' },
+      { pattern: /(belanja|shopping|baju|pakaian)/i, kategori: 'Belanja' },
+      { pattern: /(hiburan|entertainment|nonton|bioskop|game)/i, kategori: 'Hiburan' },
+      { pattern: /(kesehatan|obat|dokter|rumah\s*sakit)/i, kategori: 'Kesehatan' },
+      { pattern: /(pendidikan|sekolah|kuliah|kursus|buku)/i, kategori: 'Pendidikan' },
+      { pattern: /(tagihan|listrik|air|internet|pulsa)/i, kategori: 'Tagihan' }
+    ];
+    
+    for (const { pattern, kategori: kat } of kategoriPatterns) {
+      if (pattern.test(normalizedPrompt)) {
+        kategori = kat;
+        break;
+      }
+    }
+    
+    // Special case for "batas pengeluaran" or generic budget
+    if (normalizedPrompt.includes('batas pengeluaran') && !kategori) {
+      kategori = 'Total Pengeluaran';
+    }
+    
+    if (!kategori) {
+      // If no specific category found, try to extract any word after delete keywords
+      const extractPattern = /(?:hapus|batalkan|delete|remove)\s+(?:anggaran|budget|batas)\s+(\w+)/;
+      const match = normalizedPrompt.match(extractPattern);
+      if (match) {
+        // Capitalize first letter for consistency
+        kategori = match[1].charAt(0).toUpperCase() + match[1].slice(1);
+      }
+    }
+    
+    return kategori ? { kategori, deleteAll: false } : null;
   }
 
   /**
