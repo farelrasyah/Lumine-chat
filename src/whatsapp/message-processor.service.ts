@@ -468,9 +468,10 @@ export class MessageProcessorService {
       /analisis\s+(keuangan|pengeluaran|belanja)/,
       /(tren|pola|pattern)\s+(pengeluaran|belanja)/,
       
-      // Pattern dengan rentang waktu spesifik  
-      /dari\s+\d+.*sampai.*\d+/,
-      /antara.*dan/,
+      // Pattern dengan rentang waktu spesifik - DATE RANGES  
+      /dari\s+(tanggal\s+)?\d+\s+(sampai|hingga)\s+(tanggal\s+)?\d+/,
+      /antara\s+(tanggal\s+)?\d+\s+(dan|sampai|hingga)\s+(tanggal\s+)?\d+/,
+      /(pengeluaran|pengeluaranku)\s+dari\s+(tanggal\s+)?\d+/,
       /selama\s+\d+\s+(hari|minggu|bulan)/
     ];
     
@@ -484,14 +485,15 @@ export class MessageProcessorService {
       /rp\s*\d+/,
       
       // Pattern pencatatan transaksi
-      /^(beli|buat|bayar|bayar)\s+\w+.*\d+/,
+      /^(beli|buat|bayar)\s+\w+.*\d+/,
       /^(aku|saya)\s+(beli|bayar)/,
       
       // Deskripsi detail item
       /beli\s+(nasi|ayam|kopi|mie|pizza|burger|baju|sepatu|bensin|pulsa|token)/,
       
-      // Lokasi spesifik dengan item
-      /(di|ke|dari)\s+\w+.*\d+/
+      // Lokasi spesifik dengan item (EXCLUDE date ranges)
+      /(di|ke)\s+\w+.*\d+/,  // Removed 'dari' to avoid conflicting with date ranges
+      /dari\s+(?!tanggal)\w+.*\d+/  // Only match 'dari' if NOT followed by 'tanggal'
     ];
     
     const isTransaction = transactionPatterns.some(pattern => pattern.test(normalizedPrompt));

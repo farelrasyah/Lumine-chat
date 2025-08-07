@@ -187,6 +187,36 @@ export class EnhancedDateService {
       };
     }
 
+    // Range tanggal dalam bulan ini: dari tanggal X sampai tanggal Y
+    const dateRangeMatch = normalizedText.match(/dari\s+(tanggal\s+)?(\d+)\s+(sampai|hingga)\s+(tanggal\s+)?(\d+)/);
+    if (dateRangeMatch) {
+      const startDay = parseInt(dateRangeMatch[2]);
+      const endDay = parseInt(dateRangeMatch[5]);
+      const currentMonth = dayjs().month() + 1; // Convert to 1-based
+      const currentYear = dayjs().year();
+
+      return {
+        type: 'range',
+        rangeStart: `${currentYear}-${currentMonth.toString().padStart(2, '0')}-${startDay.toString().padStart(2, '0')}`,
+        rangeEnd: `${currentYear}-${currentMonth.toString().padStart(2, '0')}-${endDay.toString().padStart(2, '0')}`
+      };
+    }
+
+    // Range tanggal dengan format "antara...dan"
+    const betweenRangeMatch = normalizedText.match(/antara\s+(tanggal\s+)?(\d+)\s+(dan|sampai|hingga)\s+(tanggal\s+)?(\d+)/);
+    if (betweenRangeMatch) {
+      const startDay = parseInt(betweenRangeMatch[2]);
+      const endDay = parseInt(betweenRangeMatch[5]);
+      const currentMonth = dayjs().month() + 1; // Convert to 1-based
+      const currentYear = dayjs().year();
+
+      return {
+        type: 'range',
+        rangeStart: `${currentYear}-${currentMonth.toString().padStart(2, '0')}-${startDay.toString().padStart(2, '0')}`,
+        rangeEnd: `${currentYear}-${currentMonth.toString().padStart(2, '0')}-${endDay.toString().padStart(2, '0')}`
+      };
+    }
+
     // Range bulan: dari X sampai Y
     const monthRangeMatch = normalizedText.match(/dari\s+(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)\s+sampai\s+(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)(?:\s+(\d{4}))?/);
     if (monthRangeMatch) {
