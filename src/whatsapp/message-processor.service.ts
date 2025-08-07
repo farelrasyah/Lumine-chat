@@ -64,8 +64,30 @@ export class MessageProcessorService {
       }
     }
 
-    // === PRIORITAS 2: PARSING TRANSAKSI BARU ===
-    // Jika bukan query informasi, baru coba parsing sebagai transaksi
+    // === PRIORITAS 2: DETEKSI PERINTAH BUDGET ===
+    // Check for budget-related commands before transaction parsing
+    if (this.isBudgetCommand(prompt)) {
+      this.logger.log(`💰 Detected budget command: "${prompt}"`);
+      
+      try {
+        const userNumber = msg.key?.remoteJid || msg.from || 'unknown';
+        const budgetResponse = await this.handleBudgetCommand(prompt, pengirim);
+        if (budgetResponse) {
+          await SupabaseService.saveMessage(userNumber, 'user', prompt);
+          await SupabaseService.saveMessage(userNumber, 'assistant', budgetResponse);
+          this.history.push({ prompt, response: budgetResponse });
+          this.logger.log(`Budget Q: ${prompt}\nA: ${budgetResponse}`);
+          return { reply: budgetResponse, log: `Budget Q: ${prompt}\nA: ${budgetResponse}` };
+        }
+      } catch (error) {
+        this.logger.error('Error processing budget command:', error);
+        const errorReply = 'Maaf, terjadi kesalahan saat menyimpan budget.';
+        return { reply: errorReply, log: `Budget Error: ${error}` };
+      }
+    }
+
+    // === PRIORITAS 3: PARSING TRANSAKSI BARU ===
+    // Jika bukan query informasi dan bukan budget command, baru coba parsing sebagai transaksi
     const parsed = await this.parserService.parseMessage(prompt, pengirim);
     if (parsed && parsed.nominal && parsed.nominal > 0) {
       let supabaseError: any = null;
@@ -135,21 +157,6 @@ export class MessageProcessorService {
 
       // === FITUR TANYA JAWAB KEUANGAN LANJUTAN ===
       
-      // Check for budget-related commands first
-      if (this.isBudgetCommand(prompt)) {
-        try {
-          const budgetResponse = await this.handleBudgetCommand(prompt, pengirim);
-          if (budgetResponse) {
-            await SupabaseService.saveMessage(userNumber, 'assistant', budgetResponse);
-            this.history.push({ prompt, response: budgetResponse });
-            this.logger.log(`Budget Q: ${prompt}\nA: ${budgetResponse}`);
-            return { reply: budgetResponse, log: `Budget Q: ${prompt}\nA: ${budgetResponse}` };
-          }
-        } catch (error) {
-          this.logger.error('Error processing budget command:', error);
-        }
-      }
-
       // Check for insight commands
       if (this.isInsightCommand(prompt)) {
         try {
@@ -300,6 +307,21 @@ export class MessageProcessorService {
     ];
 
     const normalizedPrompt = prompt.toLowerCase();
+    
+    // Prioritas tinggi: pattern yang jelas menunjukkan budget setting
+    const budgetSetPatterns = [
+      /set\s+batas\s+(bulanan|mingguan|harian)/,
+      /budget\s+\w+\s+\d+/,
+      /batas\s+pengeluaran/,
+      /anggaran\s+\w+\s+\d+/
+    ];
+    
+    // Check explicit budget patterns first
+    if (budgetSetPatterns.some(pattern => pattern.test(normalizedPrompt))) {
+      return true;
+    }
+    
+    // Check budget keywords
     return budgetKeywords.some(keyword => normalizedPrompt.includes(keyword));
   }
 
@@ -308,6 +330,11 @@ export class MessageProcessorService {
    */
   private async handleBudgetCommand(prompt: string, pengirim: string): Promise<string | null> {
     const normalizedPrompt = prompt.toLowerCase();
+
+    // SET/CREATE BUDGET COMMANDS
+    if (this.isBudgetSetCommand(normalizedPrompt)) {
+      return await this.handleBudgetSetCommand(prompt, pengirim);
+    }
 
     // Status budget
     if (normalizedPrompt.includes('status') || normalizedPrompt.includes('cek') || normalizedPrompt.includes('budget saya')) {
@@ -341,6 +368,137 @@ export class MessageProcessorService {
     }
 
     return null;
+  }
+
+  /**
+   * Check if this is a budget setting command (not status/report)
+   */
+  private isBudgetSetCommand(normalizedPrompt: string): boolean {
+    const setBudgetPatterns = [
+      /set\s+batas\s+(bulanan|mingguan|harian)/,
+      /budget\s+\w+\s+\d+/,
+      /batas\s+pengeluaran/,
+      /anggaran\s+\w+\s+\d+/,
+      /atur\s+budget/,
+      /buat\s+budget/
+    ];
+    
+    return setBudgetPatterns.some(pattern => pattern.test(normalizedPrompt));
+  }
+
+  /**
+   * Handle budget setting commands
+   */
+  private async handleBudgetSetCommand(prompt: string, pengirim: string): Promise<string> {
+    try {
+      this.logger.log(`🎯 Processing budget set command: "${prompt}"`);
+      
+      // Parse budget information
+      const budgetInfo = this.parseBudgetCommand(prompt);
+      if (!budgetInfo) {
+        return `❌ Maaf, tidak bisa memahami perintah budget. Gunakan format seperti:\n• "budget makanan 500 ribu per bulan"\n• "set batas bulanan 2 juta"\n• "anggaran transportasi 300 ribu mingguan"`;
+      }
+
+      // Get current month
+      const currentDate = new Date();
+      const bulan = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+
+      // Save to database using SupabaseService
+      await SupabaseService.saveBudget({
+        pengirim,
+        kategori: budgetInfo.kategori,
+        limit: budgetInfo.nominal,
+        periode: budgetInfo.periode,
+        bulan: bulan
+      });
+
+      this.logger.log(`✅ Budget saved successfully for ${pengirim}: ${budgetInfo.kategori} - Rp${budgetInfo.nominal.toLocaleString('id-ID')}`);
+
+      return `✅ **Budget Berhasil Disimpan!**\n\n💰 **Kategori:** ${budgetInfo.kategori}\n💸 **Limit:** Rp${budgetInfo.nominal.toLocaleString('id-ID')}\n📅 **Periode:** ${budgetInfo.periode}\n🗓️ **Bulan:** ${this.formatBulanDisplay(bulan)}\n\nSistem akan mengingatkan Anda jika pengeluaran mendekati atau melebihi batas ini! 🔔`;
+      
+    } catch (error) {
+      this.logger.error('Error saving budget:', error);
+      return `❌ **Gagal menyimpan budget!**\n\nTerjadi kesalahan sistem. Silakan coba lagi nanti.`;
+    }
+  }
+
+  /**
+   * Parse budget command to extract information
+   */
+  private parseBudgetCommand(prompt: string): { kategori: string; nominal: number; periode: string } | null {
+    const normalizedPrompt = prompt.toLowerCase().trim();
+    
+    // Extract nominal (amount)
+    let nominal = 0;
+    const nominalPatterns = [
+      /(\d+)\s*(juta|jt)/,
+      /(\d+)\s*(ribu|rb|k)/,
+      /(\d+)\s*(rp|rupiah)/,
+      /(\d+)/
+    ];
+    
+    for (const pattern of nominalPatterns) {
+      const match = normalizedPrompt.match(pattern);
+      if (match) {
+        const number = parseInt(match[1]);
+        if (match[2]?.includes('juta') || match[2]?.includes('jt')) {
+          nominal = number * 1000000;
+        } else if (match[2]?.includes('ribu') || match[2]?.includes('rb') || match[2]?.includes('k')) {
+          nominal = number * 1000;
+        } else {
+          nominal = number;
+        }
+        break;
+      }
+    }
+    
+    if (nominal === 0) return null;
+    
+    // Extract periode
+    let periode = 'bulanan'; // default
+    if (normalizedPrompt.includes('mingguan') || normalizedPrompt.includes('minggu')) {
+      periode = 'mingguan';
+    } else if (normalizedPrompt.includes('harian') || normalizedPrompt.includes('hari')) {
+      periode = 'harian';
+    }
+    
+    // Extract kategori
+    let kategori = 'Umum'; // default
+    const kategoriPatterns = [
+      { pattern: /(makanan|makan|food)/i, kategori: 'Makanan' },
+      { pattern: /(transport|transportasi|bensin|ojek|grab|taxi)/i, kategori: 'Transportasi' },
+      { pattern: /(belanja|shopping|baju|pakaian)/i, kategori: 'Belanja' },
+      { pattern: /(hiburan|entertainment|nonton|bioskop|game)/i, kategori: 'Hiburan' },
+      { pattern: /(kesehatan|obat|dokter|rumah\s*sakit)/i, kategori: 'Kesehatan' },
+      { pattern: /(pendidikan|sekolah|kuliah|kursus|buku)/i, kategori: 'Pendidikan' },
+      { pattern: /(tagihan|listrik|air|internet|pulsa)/i, kategori: 'Tagihan' }
+    ];
+    
+    for (const { pattern, kategori: kat } of kategoriPatterns) {
+      if (pattern.test(normalizedPrompt)) {
+        kategori = kat;
+        break;
+      }
+    }
+    
+    // Special case: "set batas bulanan" without specific category
+    if (normalizedPrompt.includes('set batas') || normalizedPrompt.includes('batas pengeluaran')) {
+      kategori = 'Total Pengeluaran';
+    }
+    
+    return { kategori, nominal, periode };
+  }
+
+  /**
+   * Format bulan untuk display
+   */
+  private formatBulanDisplay(bulan: string): string {
+    const [year, month] = bulan.split('-');
+    const monthNames = [
+      'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+    ];
+    return `${monthNames[parseInt(month) - 1]} ${year}`;
   }
 
   /**

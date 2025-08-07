@@ -315,6 +315,191 @@ export class SupabaseService {
     return uniquePengirim;
   }
 
+  // === BUDGET MANAGEMENT FUNCTIONS ===
+  
+  static async saveBudget(data: {
+    pengirim: string;
+    kategori: string;
+    limit: number;
+    periode: string;
+    bulan: string;
+  }) {
+    const client = this.getClient();
+    console.log('DEBUG saveBudget - Attempting to save:', data);
+    
+    // Check if budget already exists for this pengirim, kategori, and bulan
+    const { data: existing, error: checkError } = await client
+      .from('budgets')
+      .select('*')
+      .eq('pengirim', data.pengirim)
+      .eq('kategori', data.kategori)
+      .eq('bulan', data.bulan)
+      .limit(1);
+    
+    console.log('DEBUG saveBudget - Existing budget check:', { existing, checkError });
+    
+    if (checkError) {
+      console.error('DEBUG saveBudget - Check existing failed:', checkError);
+      throw checkError;
+    }
+    
+    let result;
+    if (existing && existing.length > 0) {
+      // Update existing budget
+      console.log('DEBUG saveBudget - Updating existing budget with ID:', existing[0].id);
+      result = await client
+        .from('budgets')
+        .update({
+          limit: data.limit,
+          periode: data.periode,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existing[0].id);
+    } else {
+      // Insert new budget
+      console.log('DEBUG saveBudget - Inserting new budget');
+      result = await client.from('budgets').insert([{
+        pengirim: data.pengirim,
+        kategori: data.kategori,
+        limit: data.limit,
+        periode: data.periode,
+        bulan: data.bulan,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }]);
+    }
+    
+    console.log('DEBUG saveBudget - Operation result:', result);
+    
+    if (result.error) {
+      console.error('DEBUG saveBudget - Operation failed:', result.error);
+      throw result.error;
+    }
+    
+    return result;
+  }
+
+  static async getBudget(pengirim: string, kategori?: string, bulan?: string) {
+    const client = this.getClient();
+    console.log('DEBUG getBudget params:', { pengirim, kategori, bulan });
+    
+    let query = client
+      .from('budgets')
+      .select('*')
+      .eq('pengirim', pengirim);
+    
+    if (kategori) {
+      query = query.ilike('kategori', `%${kategori}%`);
+    }
+    if (bulan) {
+      query = query.eq('bulan', bulan);
+    }
+    
+    const { data, error } = await query.order('updated_at', { ascending: false });
+    
+    console.log('DEBUG getBudget result:', { data, error });
+    
+    if (error) {
+      console.error('DEBUG getBudget failed:', error);
+      throw error;
+    }
+    
+    return data || [];
+  }
+
+  static async getAllBudgets(pengirim: string, bulan?: string) {
+    const client = this.getClient();
+    console.log('DEBUG getAllBudgets params:', { pengirim, bulan });
+    
+    let query = client
+      .from('budgets')
+      .select('*')
+      .eq('pengirim', pengirim);
+    
+    if (bulan) {
+      query = query.eq('bulan', bulan);
+    }
+    
+    const { data, error } = await query.order('kategori');
+    
+    console.log('DEBUG getAllBudgets result:', { data, error });
+    
+    if (error) {
+      console.error('DEBUG getAllBudgets failed:', error);
+      throw error;
+    }
+    
+    return data || [];
+  }
+
+  static async deleteBudget(pengirim: string, kategori?: string, bulan?: string) {
+    const client = this.getClient();
+    console.log('DEBUG deleteBudget params:', { pengirim, kategori, bulan });
+    
+    let query = client
+      .from('budgets')
+      .delete()
+      .eq('pengirim', pengirim);
+    
+    if (kategori) {
+      query = query.ilike('kategori', `%${kategori}%`);
+    }
+    if (bulan) {
+      query = query.eq('bulan', bulan);
+    }
+    
+    const { error } = await query;
+    
+    console.log('DEBUG deleteBudget result error:', error);
+    
+    if (error) {
+      console.error('DEBUG deleteBudget failed:', error);
+      throw error;
+    }
+    
+    return true;
+  }
+
+  static async checkBudgetOverage(pengirim: string, kategori: string, bulan: string) {
+    const client = this.getClient();
+    console.log('DEBUG checkBudgetOverage params:', { pengirim, kategori, bulan });
+    
+    // Get budget for this category and month
+    const { data: budgetData, error: budgetError } = await client
+      .from('budgets')
+      .select('limit')
+      .eq('pengirim', pengirim)
+      .ilike('kategori', `%${kategori}%`)
+      .eq('bulan', bulan)
+      .limit(1);
+    
+    console.log('DEBUG checkBudgetOverage - Budget data:', { budgetData, budgetError });
+    
+    if (budgetError || !budgetData || budgetData.length === 0) {
+      console.log('DEBUG checkBudgetOverage - No budget found for this category');
+      return null; // No budget set for this category
+    }
+    
+    const budgetLimit = budgetData[0].limit;
+    
+    // Get total expenses for this category and month
+    const startDate = `${bulan}-01`;
+    const endDate = `${bulan}-31`; // Simplified, could use dayjs for exact month end
+    
+    const totalSpent = await this.getTotalTransactions(pengirim, startDate, endDate, kategori);
+    
+    console.log('DEBUG checkBudgetOverage - Budget limit:', budgetLimit, 'Total spent:', totalSpent);
+    
+    return {
+      kategori,
+      budgetLimit,
+      totalSpent,
+      remaining: budgetLimit - totalSpent,
+      isOverBudget: totalSpent > budgetLimit,
+      percentageUsed: Math.round((totalSpent / budgetLimit) * 100)
+    };
+  }
+
   // Test function untuk debugging koneksi
   static async testSupabaseConnection() {
     console.log('=== TESTING SUPABASE CONNECTION ===');
