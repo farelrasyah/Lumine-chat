@@ -1,17 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import * as dayjs from 'dayjs';
-
-const kategoriKeywords: Record<string, string[]> = {
-  Makanan: ['makan', 'jajan', 'kopi', 'minum', 'padang', 'bakso', 'nasi', 'martabak', 'sarapan', 'mcd', 'burger', 'pizza'],
-  Transportasi: ['grab', 'gojek', 'ojek', 'angkot', 'bus', 'kereta', 'taksi', 'gocar', 'goride'],
-  Belanja: ['beli', 'belanja', 'shopee', 'tokopedia', 'lazada', 'bukalapak', 'indomaret', 'alfamart'],
-  Hiburan: ['nonton', 'bioskop', 'game', 'netflix', 'spotify', 'youtube'],
-  Lainnya: [],
-};
+import { CategoryClassificationService } from '../classification/category-classification.service';
 
 @Injectable()
 export class ParserService {
-  parseMessage(message: string, pengirim: string) {
+  private readonly logger = new Logger(ParserService.name);
+  
+  constructor(
+    private readonly categoryClassificationService: CategoryClassificationService,
+  ) {}
+  async parseMessage(message: string, pengirim: string) {
     // Nominal: 5k, 10rb, 12.000, 12.5k, 20000, 15 ribu
     const nominalRegex = /([\d.,]+)\s*(k|rb|ribu|\.000)?/i;
     const match = message.match(nominalRegex);
@@ -32,25 +30,36 @@ export class ParserService {
       }
     }
     nominal = Math.round(nominal);
+    
     // Deskripsi: hapus nominal dari pesan
     const deskripsi = message.replace(nominalRegex, '').replace(/rp\s*/i, '').trim();
-    // Kategori otomatis
+    
+    // Kategori otomatis menggunakan AI
+    this.logger.log(`Starting AI classification for: "${deskripsi}"`);
+    
     let kategori = 'Lainnya';
-    for (const [cat, keywords] of Object.entries(kategoriKeywords)) {
-      for (const keyword of keywords) {
-        if (deskripsi.toLowerCase().includes(keyword)) {
-          kategori = cat;
-          break;
-        }
+    try {
+      const classificationResult = await this.categoryClassificationService.classifyTransaction(deskripsi);
+      kategori = classificationResult.kategori;
+      
+      this.logger.log(`AI Classification result: ${kategori} (confidence: ${classificationResult.confidence}%) - ${classificationResult.reason}`);
+      
+      // Log classification result for monitoring
+      if (classificationResult.confidence < 60) {
+        this.logger.warn(`Low confidence classification (${classificationResult.confidence}%) for "${deskripsi}" -> ${kategori}`);
       }
-      if (kategori !== 'Lainnya') break;
+    } catch (error) {
+      this.logger.error('Error in AI classification, using fallback:', error.message);
+      kategori = 'Lainnya';
     }
+    
     // Format tanggal untuk display di WhatsApp
     const tanggalDisplay = dayjs().format('DD/MM/YYYY');
     // Format tanggal untuk database (ISO format YYYY-MM-DD)
     const tanggalDB = dayjs().format('YYYY-MM-DD');
     const waktu = dayjs().format('HH:mm');
-    return {
+    
+    const result = {
       tanggal: tanggalDB, // Simpan format ISO ke database
       tanggalDisplay, // Format tampilan untuk WhatsApp
       waktu,
@@ -59,5 +68,8 @@ export class ParserService {
       kategori,
       pengirim,
     };
+    
+    this.logger.log(`Parse result: ${JSON.stringify(result)}`);
+    return result;
   }
 }

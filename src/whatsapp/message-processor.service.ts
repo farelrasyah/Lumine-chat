@@ -38,7 +38,7 @@ export class MessageProcessorService {
     this.logger.log(`DEBUG: Message details - notify: "${msg.notify}", pushName: "${msg.pushName}", sender.name: "${msg.sender?.name}"`);
 
     // --- Integrasi parser, Supabase & Google Sheets ---
-    const parsed = this.parserService.parseMessage(prompt, pengirim);
+    const parsed = await this.parserService.parseMessage(prompt, pengirim);
     if (parsed && parsed.nominal && parsed.nominal > 0) {
       let supabaseError: any = null;
       let sheetError: boolean = false;
