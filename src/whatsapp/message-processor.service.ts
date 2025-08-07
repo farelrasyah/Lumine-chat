@@ -117,9 +117,22 @@ export class MessageProcessorService {
       }
       // Balasan sukses/gagal
       if (!supabaseError && !sheetError) {
-        const reply = `📝 Dicatat: ${parsed.deskripsi} - Rp${parsed.nominal.toLocaleString('id-ID')}` +
+        let reply = `📝 Dicatat: ${parsed.deskripsi} - Rp${parsed.nominal.toLocaleString('id-ID')}` +
           `\n📅 ${parsed.tanggalDisplay || parsed.tanggal} ⏰ ${parsed.waktu}` +
           `\n📂 Kategori: ${parsed.kategori}`;
+
+        // === CEK PERINGATAN ANGGARAN SETELAH TRANSAKSI ===
+        try {
+          const budgetAlert = await this.checkBudgetAlert(parsed.pengirim, parsed.kategori, parsed.nominal);
+          if (budgetAlert) {
+            reply += `\n\n${budgetAlert}`;
+            this.logger.log(`Budget alert triggered for ${parsed.pengirim}: ${budgetAlert}`);
+          }
+        } catch (alertError) {
+          this.logger.error('Error checking budget alert:', alertError);
+          // Don't fail transaction if alert check fails
+        }
+
         this.logger.log(`Transaksi dicatat ke Supabase & Google Sheets: ${JSON.stringify(parsed)}`);
         return { reply, log: JSON.stringify(parsed) };
       } else if (supabaseError && sheetError) {
@@ -662,6 +675,67 @@ export class MessageProcessorService {
     this.logger.debug(`🔍 Finance query detection for "${prompt}": informationQuery=${isInformationQuery}, transaction=${isTransaction}, result=${result}`);
     
     return result;
+  }
+
+  /**
+   * Check budget alert after transaction is saved
+   */
+  private async checkBudgetAlert(pengirim: string, kategori: string, transactionAmount: number): Promise<string | null> {
+    try {
+      // Get current month for budget check
+      const currentDate = new Date();
+      const bulan = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+      
+      this.logger.debug(`Checking budget alert for ${pengirim}, kategori: ${kategori}, bulan: ${bulan}`);
+
+      // Check if there's an active budget for this category
+      const budgets = await SupabaseService.getBudget(pengirim, kategori, bulan);
+      
+      if (!budgets || budgets.length === 0) {
+        this.logger.debug(`No budget found for kategori: ${kategori}`);
+        return null; // No budget set for this category
+      }
+
+      const budget = budgets[0]; // Take the first matching budget
+      const budgetLimit = budget.limit;
+      
+      this.logger.debug(`Found budget: limit=${budgetLimit} for kategori=${kategori}`);
+
+      // Get total spending for this category in current month
+      const startDate = `${bulan}-01`;
+      const endDate = `${bulan}-31`; // Simplified end date
+      
+      const totalSpent = await SupabaseService.getTotalTransactions(pengirim, startDate, endDate, kategori);
+      const previousSpent = totalSpent - transactionAmount; // Before this transaction
+      
+      this.logger.debug(`Budget check: totalSpent=${totalSpent}, previousSpent=${previousSpent}, budgetLimit=${budgetLimit}`);
+
+      // Calculate percentages
+      const currentPercentage = Math.round((totalSpent / budgetLimit) * 100);
+      const remainingBudget = budgetLimit - totalSpent;
+      
+      // Generate appropriate alert message
+      if (totalSpent > budgetLimit) {
+        // 🚨 Budget exceeded
+        const overAmount = totalSpent - budgetLimit;
+        return `🚨 **PERINGATAN ANGGARAN!**\n\nKamu telah **melebihi** anggaran ${kategori} bulan ini!\n💸 **Total Pengeluaran:** Rp${totalSpent.toLocaleString('id-ID')}\n💰 **Anggaran:** Rp${budgetLimit.toLocaleString('id-ID')}\n📊 **Kelebihan:** Rp${overAmount.toLocaleString('id-ID')} (${currentPercentage}%)\n\n⚠️ *Pertimbangkan untuk lebih hemat di kategori ini!*`;
+        
+      } else if (currentPercentage >= 80) {
+        // ⚠️ Warning: approaching limit (80%+)
+        return `⚠️ **PERINGATAN ANGGARAN!**\n\nAnggaran ${kategori} kamu hampir habis!\n💸 **Total Pengeluaran:** Rp${totalSpent.toLocaleString('id-ID')}\n💰 **Anggaran:** Rp${budgetLimit.toLocaleString('id-ID')}\n📊 **Sisa:** Rp${remainingBudget.toLocaleString('id-ID')} (${100-currentPercentage}%)\n\n💡 *Sisanya cukup untuk ${Math.floor(remainingBudget / (totalSpent / 30))} hari lagi.*`;
+        
+      } else if (currentPercentage >= 50) {
+        // 💡 Info: halfway point (50%+)
+        return `💡 **INFO ANGGARAN**\n\nKamu sudah menggunakan ${currentPercentage}% anggaran ${kategori} bulan ini.\n💸 **Terpakai:** Rp${totalSpent.toLocaleString('id-ID')}\n💰 **Anggaran:** Rp${budgetLimit.toLocaleString('id-ID')}\n📊 **Sisa:** Rp${remainingBudget.toLocaleString('id-ID')}\n\n✅ *Masih dalam batas aman.*`;
+      }
+      
+      // No alert needed if under 50%
+      return null;
+      
+    } catch (error) {
+      this.logger.error('Error in checkBudgetAlert:', error);
+      return null; // Don't fail transaction if alert check fails
+    }
   }
 
   /**
