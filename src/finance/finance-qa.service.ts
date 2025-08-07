@@ -1,39 +1,75 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { EnhancedDateService, TimeContext } from './enhanced-date.service';
+import { FinanceAnalysisService } from './finance-analysis.service';
+import { AdvancedFinanceParserService } from './advanced-finance-parser.service';
+import { AdvancedFinanceResponseService } from './advanced-finance-response.service';
 
 export interface FinanceQuery {
   intent: string;
   timeRange?: string | null;
+  timeContext?: TimeContext | null;
   kategori?: string;
   pengirim: string;
+  originalQuestion?: string;
 }
 
 @Injectable()
 export class FinanceQAService {
   private readonly logger = new Logger(FinanceQAService.name);
 
+  constructor(
+    private enhancedDateService: EnhancedDateService,
+    private analysisService: FinanceAnalysisService,
+    private parserService: AdvancedFinanceParserService,
+    private responseService: AdvancedFinanceResponseService
+  ) {}
+
+  /**
+   * Main entry point for processing finance questions
+   */
   async processFinanceQuestion(question: string, pengirim: string): Promise<string | null> {
-    const query = this.parseFinanceQuestion(question, pengirim);
-    if (!query) return null;
+    this.logger.log(`Processing enhanced finance question: "${question}" from ${pengirim}`);
 
     try {
-      switch (query.intent) {
-        case 'total':
-          return await this.handleTotalQuery(query);
-        case 'kategori':
-          return await this.handleCategoryQuery(query);
-        case 'terakhir':
-          return await this.handleLastTransactionQuery(query);
-        case 'terbesar':
-          return await this.handleBiggestTransactionQuery(query);
-        case 'riwayat':
-          return await this.handleHistoryQuery(query);
-        default:
-          return null;
+      // Try advanced parsing first
+      const advancedQuery = this.parserService.parseAdvancedQuery(question, pengirim);
+      if (advancedQuery) {
+        this.logger.log(`Advanced query detected: ${advancedQuery.intent}`);
+        return await this.responseService.processAdvancedQuery(advancedQuery);
       }
+
+      // Fall back to legacy parsing for backward compatibility
+      const legacyQuery = this.parseFinanceQuestion(question, pengirim);
+      if (legacyQuery) {
+        this.logger.log(`Legacy query detected: ${legacyQuery.intent}`);
+        return await this.processLegacyQuery(legacyQuery);
+      }
+
+      return null;
     } catch (error) {
       this.logger.error('Error processing finance question:', error);
-      return 'Maaf, terjadi kesalahan saat mengambil data keuangan.';
+      return 'Maaf, terjadi kesalahan saat menganalisis pertanyaan keuangan Anda. Silakan coba lagi nanti.';
+    }
+  }
+
+  /**
+   * Process legacy queries for backward compatibility
+   */
+  private async processLegacyQuery(query: FinanceQuery): Promise<string> {
+    switch (query.intent) {
+      case 'total':
+        return await this.handleTotalQuery(query);
+      case 'kategori':
+        return await this.handleCategoryQuery(query);
+      case 'terakhir':
+        return await this.handleLastTransactionQuery(query);
+      case 'terbesar':
+        return await this.handleBiggestTransactionQuery(query);
+      case 'riwayat':
+        return await this.handleHistoryQuery(query);
+      default:
+        return 'Maaf, saya belum bisa memahami pertanyaan keuangan ini.';
     }
   }
 
@@ -42,39 +78,72 @@ export class FinanceQAService {
     
     this.logger.log(`Parsing finance question: "${normalizedQuestion}"`);
 
+    // Try enhanced time parsing first
+    const timeContext = this.enhancedDateService.parseTimeExpression(normalizedQuestion);
+
     // Intent: Kategori - cek dulu kategori karena lebih spesifik
     const kategori = this.extractKategori(normalizedQuestion);
     if (kategori) {
       this.logger.log(`Detected category: ${kategori}`);
       const timeRange = this.extractTimeRange(normalizedQuestion);
-      return { intent: 'kategori', timeRange, kategori, pengirim };
+      return { 
+        intent: 'kategori', 
+        timeRange, 
+        timeContext, 
+        kategori, 
+        pengirim,
+        originalQuestion: question
+      };
     }
 
     // Intent: Total pengeluaran
     if (this.matchTotal(normalizedQuestion)) {
       this.logger.log(`Detected total query`);
       const timeRange = this.extractTimeRange(normalizedQuestion);
-      return { intent: 'total', timeRange, pengirim };
+      return { 
+        intent: 'total', 
+        timeRange, 
+        timeContext, 
+        pengirim,
+        originalQuestion: question
+      };
     }
 
     // Intent: Transaksi terakhir
     if (this.matchTerakhir(normalizedQuestion)) {
       this.logger.log(`Detected last transaction query`);
-      return { intent: 'terakhir', pengirim };
+      return { 
+        intent: 'terakhir', 
+        timeContext, 
+        pengirim,
+        originalQuestion: question
+      };
     }
 
     // Intent: Transaksi terbesar
     if (this.matchTerbesar(normalizedQuestion)) {
       this.logger.log(`Detected biggest transaction query`);
       const timeRange = this.extractTimeRange(normalizedQuestion);
-      return { intent: 'terbesar', timeRange, pengirim };
+      return { 
+        intent: 'terbesar', 
+        timeRange, 
+        timeContext, 
+        pengirim,
+        originalQuestion: question
+      };
     }
 
     // Intent: Riwayat
     if (this.matchRiwayat(normalizedQuestion)) {
       this.logger.log(`Detected history query`);
       const timeRange = this.extractTimeRange(normalizedQuestion);
-      return { intent: 'riwayat', timeRange, pengirim };
+      return { 
+        intent: 'riwayat', 
+        timeRange, 
+        timeContext, 
+        pengirim,
+        originalQuestion: question
+      };
     }
 
     this.logger.log(`No finance intent detected for: "${normalizedQuestion}"`);
@@ -88,7 +157,11 @@ export class FinanceQAService {
     
     const hasTotal = /total|jumlah|berapa/.test(question);
     
-    return hasGeneralPengeluaran || hasTotal;
+    // Additional patterns for enhanced matching
+    const hasPengeluaranKu = /pengeluaranku|pengeluaran.*ku|ku.*pengeluaran/.test(question);
+    const hasPengeluaranHari = /pengeluaran.*hari|hari.*pengeluaran/.test(question);
+    
+    return hasGeneralPengeluaran || hasTotal || hasPengeluaranKu || hasPengeluaranHari;
   }
 
   private matchTerakhir(question: string): boolean {
@@ -128,8 +201,14 @@ export class FinanceQAService {
   }
 
   private extractTimeRange(question: string): string | null {
-    const today = new Date();
-    
+    // Try enhanced date parsing first
+    const timeContext = this.enhancedDateService.parseTimeExpression(question);
+    if (timeContext) {
+      this.logger.log(`Enhanced date parsing detected context: ${JSON.stringify(timeContext)}`);
+      return 'enhanced'; // Special marker for enhanced parsing
+    }
+
+    // Fallback to legacy parsing
     if (/hari ini|today/.test(question)) {
       return 'today';
     } else if (/kemarin|yesterday/.test(question)) {

@@ -10,6 +10,8 @@ const AI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemi
 import { ParserService } from '../parser/parser.service';
 import { SheetService } from '../sheet/sheet.service';
 import { FinanceQAService } from '../finance/finance-qa.service';
+import { BudgetManagementService } from '../finance/budget-management.service';
+import { FinancialInsightService } from '../finance/financial-insight.service';
 
 @Injectable()
 export class MessageProcessorService {
@@ -20,6 +22,8 @@ export class MessageProcessorService {
     private readonly parserService: ParserService,
     private readonly sheetService: SheetService,
     private readonly financeQAService: FinanceQAService,
+    private readonly budgetService: BudgetManagementService,
+    private readonly insightService: FinancialInsightService,
   ) {}
 
   async processMessage(msg: any): Promise<{ reply: string | null; log: string }> {
@@ -105,7 +109,39 @@ export class MessageProcessorService {
         return { reply: personalReply, log: `Q: ${prompt}\nA: ${personalReply}` };
       }
 
-      // === FITUR TANYA JAWAB KEUANGAN ===
+      // === FITUR TANYA JAWAB KEUANGAN LANJUTAN ===
+      
+      // Check for budget-related commands first
+      if (this.isBudgetCommand(prompt)) {
+        try {
+          const budgetResponse = await this.handleBudgetCommand(prompt, pengirim);
+          if (budgetResponse) {
+            await SupabaseService.saveMessage(userNumber, 'assistant', budgetResponse);
+            this.history.push({ prompt, response: budgetResponse });
+            this.logger.log(`Budget Q: ${prompt}\nA: ${budgetResponse}`);
+            return { reply: budgetResponse, log: `Budget Q: ${prompt}\nA: ${budgetResponse}` };
+          }
+        } catch (error) {
+          this.logger.error('Error processing budget command:', error);
+        }
+      }
+
+      // Check for insight commands
+      if (this.isInsightCommand(prompt)) {
+        try {
+          const insightResponse = await this.handleInsightCommand(prompt, pengirim);
+          if (insightResponse) {
+            await SupabaseService.saveMessage(userNumber, 'assistant', insightResponse);
+            this.history.push({ prompt, response: insightResponse });
+            this.logger.log(`Insight Q: ${prompt}\nA: ${insightResponse}`);
+            return { reply: insightResponse, log: `Insight Q: ${prompt}\nA: ${insightResponse}` };
+          }
+        } catch (error) {
+          this.logger.error('Error processing insight command:', error);
+        }
+      }
+
+      // Enhanced finance questions
       if (this.financeQAService.isFinanceQuestion(prompt)) {
         try {
           const financeResponse = await this.financeQAService.processFinanceQuestion(prompt, pengirim);
@@ -117,7 +153,7 @@ export class MessageProcessorService {
           }
         } catch (error) {
           this.logger.error('Error processing finance question:', error);
-          const errorReply = 'Maaf, terjadi kesalahan saat mengakses data keuangan Anda.';
+          const errorReply = 'Maaf, terjadi kesalahan saat menganalisis data keuangan Anda.';
           await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
           return { reply: errorReply, log: `Finance Error: ${error}` };
         }
@@ -224,5 +260,164 @@ export class MessageProcessorService {
       // Normalisasi newline
       .replace(/\r?\n/g, '\n')
       .trim();
+  }
+
+  // === ADVANCED FINANCE COMMAND HANDLERS ===
+
+  /**
+   * Check if the message is a budget-related command
+   */
+  private isBudgetCommand(prompt: string): boolean {
+    const budgetKeywords = [
+      'budget', 'anggaran', 'batas', 'limit',
+      'set batas', 'buat budget', 'atur anggaran',
+      'status budget', 'cek budget', 'budget saya',
+      'saran budget', 'rekomendasi budget'
+    ];
+
+    const normalizedPrompt = prompt.toLowerCase();
+    return budgetKeywords.some(keyword => normalizedPrompt.includes(keyword));
+  }
+
+  /**
+   * Handle budget-related commands
+   */
+  private async handleBudgetCommand(prompt: string, pengirim: string): Promise<string | null> {
+    const normalizedPrompt = prompt.toLowerCase();
+
+    // Status budget
+    if (normalizedPrompt.includes('status') || normalizedPrompt.includes('cek') || normalizedPrompt.includes('budget saya')) {
+      const budgets = await this.budgetService.getBudgets(pengirim);
+      if (budgets.length === 0) {
+        return `💼 **Status Budget:**\n\nAnda belum menetapkan budget. Gunakan perintah seperti:\n• "set batas bulanan 2 juta"\n• "budget makanan 500 ribu per bulan"\n\nUntuk mulai mengatur keuangan Anda!`;
+      }
+
+      const alerts = await this.budgetService.checkBudgets(pengirim);
+      if (alerts.length > 0) {
+        let response = `💼 **Status Budget:**\n\n`;
+        alerts.forEach(alert => {
+          const emoji = alert.alertLevel === 'exceeded' ? '🚨' : alert.alertLevel === 'danger' ? '⚠️' : '✅';
+          response += `${emoji} ${alert.message}\n`;
+        });
+        return response;
+      } else {
+        return `✅ **Status Budget:**\n\nSemua budget Anda masih dalam batas aman! Lanjutkan kebiasaan baik ini.`;
+      }
+    }
+
+    // Saran budget
+    if (normalizedPrompt.includes('saran') || normalizedPrompt.includes('rekomendasi')) {
+      return await this.budgetService.suggestBudgets(pengirim);
+    }
+
+    // Laporan budget
+    if (normalizedPrompt.includes('laporan') || normalizedPrompt.includes('report')) {
+      const reportType = normalizedPrompt.includes('minggu') ? 'weekly' : 'monthly';
+      return await this.budgetService.generateBudgetReport(pengirim, reportType);
+    }
+
+    return null;
+  }
+
+  /**
+   * Check if the message is an insight-related command
+   */
+  private isInsightCommand(prompt: string): boolean {
+    const insightKeywords = [
+      'analisis', 'insight', 'pola', 'tren', 'trend',
+      'laporan keuangan', 'financial report', 'summary',
+      'rekomendasi hemat', 'tips hemat', 'cara hemat',
+      'prediksi', 'perkiraan', 'proyeksi',
+      'ringkasan', 'kesimpulan', 'evaluasi keuangan',
+      'analisis keuangan', 'finance insight'
+    ];
+
+    const normalizedPrompt = prompt.toLowerCase();
+    return insightKeywords.some(keyword => normalizedPrompt.includes(keyword));
+  }
+
+  /**
+   * Handle insight-related commands
+   */
+  private async handleInsightCommand(prompt: string, pengirim: string): Promise<string | null> {
+    const normalizedPrompt = prompt.toLowerCase();
+
+    // Generate comprehensive insights
+    if (normalizedPrompt.includes('analisis') || normalizedPrompt.includes('insight')) {
+      const timeframe = normalizedPrompt.includes('minggu') ? 'week' : 
+                      normalizedPrompt.includes('kuartal') ? 'quarter' : 'month';
+      
+      const insights = await this.insightService.generateInsights(pengirim, timeframe);
+      
+      if (insights.length === 0) {
+        return `🧠 **Analisis Keuangan:**\n\nBelum ada cukup data untuk menganalisis pola pengeluaran Anda. Catat beberapa transaksi terlebih dahulu untuk mendapatkan insight yang lebih akurat.`;
+      }
+
+      let response = `🧠 **Analisis Keuangan ${timeframe === 'week' ? 'Mingguan' : 'Bulanan'}:**\n\n`;
+      
+      insights.slice(0, 5).forEach((insight, index) => {
+        const emoji = this.getInsightEmoji(insight.type);
+        response += `${emoji} **${insight.title}**\n${insight.message}\n\n`;
+      });
+
+      response += `💡 Ketik "rekomendasi hemat" untuk tips penghematan personal!`;
+      return response;
+    }
+
+    // Generate automated report
+    if (normalizedPrompt.includes('laporan') || normalizedPrompt.includes('report') || normalizedPrompt.includes('ringkasan')) {
+      const reportType = normalizedPrompt.includes('minggu') ? 'weekly' : 'monthly';
+      const report = await this.insightService.generateAutomatedReport(pengirim, reportType);
+      return this.insightService.formatAutomatedReport(report);
+    }
+
+    // Detect unusual spending
+    if (normalizedPrompt.includes('unusual') || normalizedPrompt.includes('tidak biasa') || normalizedPrompt.includes('aneh')) {
+      const notifications = await this.insightService.detectUnusualSpending(pengirim);
+      
+      if (notifications.length === 0) {
+        return `✅ **Deteksi Pengeluaran:**\n\nTidak ada pola pengeluaran yang tidak biasa terdeteksi. Pengeluaran Anda terlihat konsisten!`;
+      }
+
+      let response = `⚠️ **Deteksi Pengeluaran Tidak Biasa:**\n\n`;
+      notifications.forEach(notif => {
+        response += `• ${notif.message}\n`;
+      });
+
+      return response;
+    }
+
+    // Personalized tips
+    if (normalizedPrompt.includes('tips') || normalizedPrompt.includes('saran') || normalizedPrompt.includes('rekomendasi')) {
+      const tips = await this.insightService.generatePersonalizedTips(pengirim);
+      
+      if (tips.length === 0) {
+        return `💡 **Tips Keuangan:**\n\nBelum ada tips spesifik yang bisa diberikan. Lakukan lebih banyak transaksi untuk mendapatkan rekomendasi yang lebih personal!`;
+      }
+
+      let response = `💡 **Tips Keuangan Personal:**\n\n`;
+      tips.forEach(tip => {
+        response += `• ${tip.message}\n\n`;
+      });
+
+      return response;
+    }
+
+    return null;
+  }
+
+  /**
+   * Get emoji for insight types
+   */
+  private getInsightEmoji(type: string): string {
+    const emojiMap: Record<string, string> = {
+      'achievement': '🎉',
+      'warning': '⚠️',
+      'tip': '💡',
+      'milestone': '🏆',
+      'trend': '📈'
+    };
+
+    return emojiMap[type] || '💡';
   }
 }
