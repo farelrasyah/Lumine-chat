@@ -41,7 +41,31 @@ export class MessageProcessorService {
     this.logger.log(`DEBUG: Pengirim detected: "${pengirim}"`);
     this.logger.log(`DEBUG: Message details - notify: "${msg.notify}", pushName: "${msg.pushName}", sender.name: "${msg.sender?.name}"`);
 
-    // --- Integrasi parser, Supabase & Google Sheets ---
+    // === PRIORITAS 1: DETEKSI QUERY INFORMASI KEUANGAN ===
+    // Cek dulu apakah ini pertanyaan keuangan sebelum diparsing sebagai transaksi
+    if (this.isFinanceQueryRequest(prompt)) {
+      this.logger.log(`🔍 Detected finance query request: "${prompt}"`);
+      
+      try {
+        const financeResponse = await this.financeQAService.processFinanceQuestion(prompt, pengirim);
+        if (financeResponse) {
+          // Simpan ke chat history
+          const userNumber = msg.key?.remoteJid || msg.from || 'unknown';
+          await SupabaseService.saveMessage(userNumber, 'user', prompt);
+          await SupabaseService.saveMessage(userNumber, 'assistant', financeResponse);
+          this.history.push({ prompt, response: financeResponse });
+          this.logger.log(`Finance Query Q: ${prompt}\nA: ${financeResponse}`);
+          return { reply: financeResponse, log: `Finance Query Q: ${prompt}\nA: ${financeResponse}` };
+        }
+      } catch (error) {
+        this.logger.error('Error processing finance query:', error);
+        const errorReply = 'Maaf, terjadi kesalahan saat menganalisis data keuangan Anda.';
+        return { reply: errorReply, log: `Finance Query Error: ${error}` };
+      }
+    }
+
+    // === PRIORITAS 2: PARSING TRANSAKSI BARU ===
+    // Jika bukan query informasi, baru coba parsing sebagai transaksi
     const parsed = await this.parserService.parseMessage(prompt, pengirim);
     if (parsed && parsed.nominal && parsed.nominal > 0) {
       let supabaseError: any = null;
@@ -404,6 +428,80 @@ export class MessageProcessorService {
     }
 
     return null;
+  }
+
+  /**
+   * Deteksi apakah prompt adalah query informasi keuangan, bukan pencatatan transaksi
+   */
+  private isFinanceQueryRequest(prompt: string): boolean {
+    const normalizedPrompt = prompt.toLowerCase().trim();
+    
+    // Pattern untuk query informasi vs pencatatan transaksi
+    const informationQueryPatterns = [
+      // Query dengan kata tanya eksplisit
+      /^(berapa|total|jumlah|apa|daftar|riwayat|history|ringkasan|analisis)/,
+      
+      // Pattern "pengeluaranku [waktu]" - ini query, bukan transaksi
+      /pengeluaranku\s+(hari|minggu|bulan|tahun|kemarin|tadi|lalu)/,
+      /pengeluaran.*ku\s+(hari|minggu|bulan|tahun|kemarin|tadi|lalu)/,
+      
+      // Pattern "pengeluaranku [angka] [waktu] lalu" - ini juga query
+      /pengeluaranku\s+\d+\s+(hari|minggu|bulan|tahun)\s+lalu/,
+      /pengeluaran.*ku\s+\d+\s+(hari|minggu|bulan|tahun)\s+lalu/,
+      
+      // Pattern "pengeluaran [waktu]" tanpa nominal
+      /^pengeluaran\s+(hari|minggu|bulan|tahun|kemarin|tadi|lalu|ini)/,
+      /^pengeluaran\s+dari\s+/,
+      
+      // Pattern informational lainnya  
+      /belanja\s+(apa|dimana|kapan)/,
+      /beli\s+(apa|dimana|kapan)\s+(aja|saja)/,
+      /(ada|punya)\s+data/,
+      /cek\s+(pengeluaran|transaksi|saldo)/,
+      
+      // Pattern perbandingan
+      /(bandingkan|banding|vs|versus)\s+(pengeluaran|belanja)/,
+      /pengeluaran.*vs.*pengeluaran/,
+      
+      // Pattern prediksi & analisis
+      /(prediksi|proyeksi|estimasi|perkiraan)\s+(pengeluaran|belanja)/,
+      /analisis\s+(keuangan|pengeluaran|belanja)/,
+      /(tren|pola|pattern)\s+(pengeluaran|belanja)/,
+      
+      // Pattern dengan rentang waktu spesifik  
+      /dari\s+\d+.*sampai.*\d+/,
+      /antara.*dan/,
+      /selama\s+\d+\s+(hari|minggu|bulan)/
+    ];
+    
+    // Cek apakah prompt cocok dengan pattern query informasi
+    const isInformationQuery = informationQueryPatterns.some(pattern => pattern.test(normalizedPrompt));
+    
+    // Pattern yang menunjukkan ini adalah transaksi, bukan query
+    const transactionPatterns = [
+      // Ada nominal eksplisit
+      /\b\d+\s*(ribu|rb|juta|jt|rupiah|rp)\b/,
+      /rp\s*\d+/,
+      
+      // Pattern pencatatan transaksi
+      /^(beli|buat|bayar|bayar)\s+\w+.*\d+/,
+      /^(aku|saya)\s+(beli|bayar)/,
+      
+      // Deskripsi detail item
+      /beli\s+(nasi|ayam|kopi|mie|pizza|burger|baju|sepatu|bensin|pulsa|token)/,
+      
+      // Lokasi spesifik dengan item
+      /(di|ke|dari)\s+\w+.*\d+/
+    ];
+    
+    const isTransaction = transactionPatterns.some(pattern => pattern.test(normalizedPrompt));
+    
+    // Logic: Jika cocok dengan information query DAN TIDAK cocok dengan transaction, maka ini adalah query
+    const result = isInformationQuery && !isTransaction;
+    
+    this.logger.debug(`🔍 Finance query detection for "${prompt}": informationQuery=${isInformationQuery}, transaction=${isTransaction}, result=${result}`);
+    
+    return result;
   }
 
   /**
