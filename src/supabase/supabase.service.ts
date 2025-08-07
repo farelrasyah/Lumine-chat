@@ -436,28 +436,93 @@ export class SupabaseService {
     const client = this.getClient();
     console.log('DEBUG deleteBudget params:', { pengirim, kategori, bulan });
     
-    let query = client
+    // First, let's see what we're about to delete
+    let selectQuery = client
+      .from('budgets')
+      .select('id, kategori, limit, bulan')
+      .eq('pengirim', pengirim);
+    
+    if (kategori) {
+      selectQuery = selectQuery.ilike('kategori', `%${kategori}%`);
+    }
+    if (bulan) {
+      selectQuery = selectQuery.eq('bulan', bulan);
+    }
+    
+    const { data: budgetsToDelete, error: selectError } = await selectQuery;
+    console.log('DEBUG deleteBudget - budgets to delete:', budgetsToDelete);
+    console.log('DEBUG deleteBudget - select error:', selectError);
+    
+    if (selectError) {
+      console.error('DEBUG deleteBudget select failed:', selectError);
+      throw selectError;
+    }
+    
+    if (!budgetsToDelete || budgetsToDelete.length === 0) {
+      console.log('DEBUG deleteBudget - no budgets found to delete');
+      return { deleted: 0, budgets: [] };
+    }
+    
+    // Now perform the actual delete
+    let deleteQuery = client
       .from('budgets')
       .delete()
       .eq('pengirim', pengirim);
     
     if (kategori) {
-      query = query.ilike('kategori', `%${kategori}%`);
+      deleteQuery = deleteQuery.ilike('kategori', `%${kategori}%`);
     }
     if (bulan) {
-      query = query.eq('bulan', bulan);
+      deleteQuery = deleteQuery.eq('bulan', bulan);
     }
     
-    const { error } = await query;
+    const { error: deleteError } = await deleteQuery;
     
-    console.log('DEBUG deleteBudget result error:', error);
+    console.log('DEBUG deleteBudget result - error:', deleteError);
     
-    if (error) {
-      console.error('DEBUG deleteBudget failed:', error);
-      throw error;
+    if (deleteError) {
+      console.error('DEBUG deleteBudget failed:', deleteError);
+      throw deleteError;
     }
     
-    return true;
+    // CRITICAL FIX: Force a small delay and verify deletion
+    console.log('DEBUG deleteBudget - Waiting 100ms for delete to complete...');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // Verify deletion by re-querying
+    let verifyQuery = client
+      .from('budgets')
+      .select('id, kategori, limit, bulan')
+      .eq('pengirim', pengirim);
+    
+    if (kategori) {
+      verifyQuery = verifyQuery.ilike('kategori', `%${kategori}%`);
+    }
+    if (bulan) {
+      verifyQuery = verifyQuery.eq('bulan', bulan);
+    }
+    
+    const { data: remainingBudgets, error: verifyError } = await verifyQuery;
+    console.log('DEBUG deleteBudget verification - remaining budgets:', remainingBudgets);
+    console.log('DEBUG deleteBudget verification - error:', verifyError);
+    
+    if (verifyError) {
+      console.error('DEBUG deleteBudget verification failed:', verifyError);
+      throw verifyError;
+    }
+    
+    const actualDeletedCount = budgetsToDelete.length - (remainingBudgets?.length || 0);
+    
+    if (remainingBudgets && remainingBudgets.length > 0) {
+      console.error('DEBUG deleteBudget - CRITICAL ERROR: Budgets still exist after delete!');
+      console.error('DEBUG deleteBudget - Remaining:', remainingBudgets);
+      throw new Error(`Delete operation failed: ${remainingBudgets.length} budgets still exist after delete. Check RLS policies or database constraints.`);
+    }
+    
+    return { 
+      deleted: actualDeletedCount, 
+      budgets: budgetsToDelete 
+    };
   }
 
   static async checkBudgetOverage(pengirim: string, kategori: string, bulan: string) {

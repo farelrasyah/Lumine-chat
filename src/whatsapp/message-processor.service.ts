@@ -573,22 +573,14 @@ export class MessageProcessorService {
 
       if (deleteInfo.deleteAll) {
         // Delete all budgets for current month
-        const existingBudgets = await SupabaseService.getAllBudgets(pengirim, bulan);
-        deletedCategories = existingBudgets.map(b => b.kategori);
-        
-        if (existingBudgets.length > 0) {
-          await SupabaseService.deleteBudget(pengirim, undefined, bulan);
-          deletedCount = existingBudgets.length;
-        }
+        const deleteResult = await SupabaseService.deleteBudget(pengirim, undefined, bulan);
+        deletedCount = deleteResult.deleted;
+        deletedCategories = deleteResult.budgets.map(b => b.kategori);
       } else if (deleteInfo.kategori) {
-        // Delete specific category budget
-        const existingBudgets = await SupabaseService.getBudget(pengirim, deleteInfo.kategori, bulan);
-        
-        if (existingBudgets.length > 0) {
-          await SupabaseService.deleteBudget(pengirim, deleteInfo.kategori, bulan);
-          deletedCount = 1;
-          deletedCategories.push(deleteInfo.kategori);
-        }
+        // Delete specific category budget  
+        const deleteResult = await SupabaseService.deleteBudget(pengirim, deleteInfo.kategori, bulan);
+        deletedCount = deleteResult.deleted;
+        deletedCategories = deleteResult.budgets.map(b => b.kategori);
       }
 
       // Generate response
@@ -600,6 +592,14 @@ export class MessageProcessorService {
         }
       } else {
         this.logger.log(`✅ Successfully deleted ${deletedCount} budget(s) for ${pengirim}: ${deletedCategories.join(', ')}`);
+        
+        // Verification step: ensure budgets are actually deleted
+        const remainingBudgets = await SupabaseService.getBudget(pengirim, undefined, bulan);
+        if (remainingBudgets.length > 0) {
+          this.logger.warn(`⚠️ WARNING: Found ${remainingBudgets.length} remaining budgets after delete:`, remainingBudgets.map(b => ({ id: b.id, kategori: b.kategori })));
+        } else {
+          this.logger.log('✅ Verification passed: No remaining budgets found');
+        }
         
         if (deleteInfo.deleteAll) {
           return `✅ **Semua Budget Berhasil Dihapus!**\n\n🗓️ **Bulan:** ${this.formatBulanDisplay(bulan)}\n📂 **Kategori yang Dihapus:** ${deletedCategories.join(', ')}\n🗑️ **Total Dihapus:** ${deletedCount} budget\n\n💡 *Anda dapat mengatur budget baru kapan saja dengan perintah "budget [kategori] [nominal] per bulan"*`;
