@@ -67,6 +67,8 @@ export class AdvancedFinanceResponseService {
           return await this.handleChallengeQuery(query);
         case 'hari_paling_boros':
           return await this.handleHariPalingBorosQuery(query);
+        case 'hari_paling_hemat':
+          return await this.handleHariPalingHematQuery(query);
         default:
           return 'Maaf, saya belum bisa memahami pertanyaan keuangan ini. Coba gunakan kata kunci seperti "pengeluaran", "total", "bulan lalu", atau "kategori makanan".';
       }
@@ -732,7 +734,8 @@ export class AdvancedFinanceResponseService {
 
       // Add some context/insight
       const totalDays = dailyTotals.size;
-      const averageDaily = maxTransactions.reduce((sum, t) => sum + t.nominal, 0) / totalDays;
+      const totalSpent = Array.from(dailyTotals.values()).reduce((sum, day) => sum + day.total, 0);
+      const averageDaily = totalSpent / totalDays;
       const overagePercentage = Math.round((maxTotal / averageDaily - 1) * 100);
       
       response += `\n📊 **Insight:**\n`;
@@ -745,6 +748,138 @@ export class AdvancedFinanceResponseService {
     } catch (error) {
       this.logger.error('Error in handleHariPalingBorosQuery:', error);
       return 'Maaf, terjadi kesalahan saat menganalisis hari paling boros. Silakan coba lagi nanti.';
+    }
+  }
+
+  /**
+   * Handle "hari paling hemat" queries
+   */
+  private async handleHariPalingHematQuery(query: AdvancedFinanceQuery): Promise<string> {
+    try {
+      this.logger.debug('Processing hari paling hemat query');
+
+      // Determine time range - default to current month if not specified
+      let startDate: string;
+      let endDate: string;
+      let periodName: string;
+
+      if (query.timeContext) {
+        startDate = query.timeContext.rangeStart || dayjs().startOf('month').format('YYYY-MM-DD');
+        endDate = query.timeContext.rangeEnd || dayjs().endOf('month').format('YYYY-MM-DD');
+        periodName = query.timeContext.period || 'periode yang diminta';
+      } else {
+        // Default to current month
+        const now = dayjs();
+        startDate = now.startOf('month').format('YYYY-MM-DD');
+        endDate = now.endOf('month').format('YYYY-MM-DD');
+        periodName = 'bulan ini';
+      }
+
+      this.logger.debug(`Getting transactions from ${startDate} to ${endDate}`);
+
+      // Get all transactions in the time range
+      const transactions = await SupabaseService.getTransactionHistory(
+        query.pengirim, 
+        startDate, 
+        endDate, 
+        1000 // High limit to get all transactions
+      );
+
+      if (!transactions || transactions.length === 0) {
+        return `💰 **Tidak ada data pengeluaran untuk ${periodName}.**\n\nBelum ada transaksi yang tercatat dalam periode ini.`;
+      }
+
+      // Group transactions by date and sum up daily totals
+      const dailyTotals: Map<string, { total: number; transactions: TransactionData[] }> = new Map();
+
+      for (const transaction of transactions) {
+        const date = transaction.tanggal;
+        if (!dailyTotals.has(date)) {
+          dailyTotals.set(date, { total: 0, transactions: [] });
+        }
+        const dayData = dailyTotals.get(date)!;
+        dayData.total += transaction.nominal;
+        dayData.transactions.push(transaction);
+      }
+
+      if (dailyTotals.size === 0) {
+        return `💰 **Tidak ada data pengeluaran untuk ${periodName}.**`;
+      }
+
+      // Find the day with lowest spending (but > 0)
+      let minDate = '';
+      let minTotal = Number.MAX_SAFE_INTEGER;
+      let minTransactions: TransactionData[] = [];
+
+      for (const [date, data] of dailyTotals.entries()) {
+        if (data.total > 0 && data.total < minTotal) {
+          minTotal = data.total;
+          minDate = date;
+          minTransactions = data.transactions;
+        }
+      }
+
+      if (!minDate) {
+        return `💰 **Tidak ada data pengeluaran untuk ${periodName}.**`;
+      }
+
+      // Format the date for display
+      const formattedDate = dayjs(minDate).format('dddd, DD MMMM YYYY');
+      const dayName = dayjs(minDate).format('dddd');
+
+      // Create response
+      let response = `💰 **Hari paling hemat ${periodName} adalah *${formattedDate}***\n`;
+      response += `💸 **Total pengeluaran:** ${this.formatRupiah(minTotal)}\n\n`;
+      
+      // Add transaction details
+      if (minTransactions.length > 0) {
+        response += `🧾 **Rincian ${minTransactions.length} transaksi:**\n`;
+        
+        // Group by category for better display
+        const categoryTotals: Map<string, { total: number; items: string[] }> = new Map();
+        
+        for (const transaction of minTransactions) {
+          const category = transaction.kategori || 'Lainnya';
+          if (!categoryTotals.has(category)) {
+            categoryTotals.set(category, { total: 0, items: [] });
+          }
+          const categoryData = categoryTotals.get(category)!;
+          categoryData.total += transaction.nominal;
+          categoryData.items.push(`${transaction.deskripsi} - ${this.formatRupiah(transaction.nominal)}`);
+        }
+
+        // Display by category
+        for (const [category, data] of categoryTotals.entries()) {
+          const emoji = this.getCategoryEmoji(category);
+          response += `${emoji} **${category}:** ${this.formatRupiah(data.total)}\n`;
+          
+          // Show individual items (max 3 per category to avoid cluttering)
+          const itemsToShow = data.items.slice(0, 3);
+          for (const item of itemsToShow) {
+            response += `   • ${item}\n`;
+          }
+          if (data.items.length > 3) {
+            response += `   • ... dan ${data.items.length - 3} item lainnya\n`;
+          }
+        }
+      }
+
+      // Add some context/insight
+      const totalDays = dailyTotals.size;
+      const totalSpent = Array.from(dailyTotals.values()).reduce((sum, day) => sum + day.total, 0);
+      const averageDaily = totalSpent / totalDays;
+      const savingsPercentage = Math.round((1 - minTotal / averageDaily) * 100);
+      
+      response += `\n📊 **Insight:**\n`;
+      response += `• Pengeluaran hari ini ${savingsPercentage}% lebih hemat dari rata-rata harian\n`;
+      response += `• Total hari dengan transaksi: ${totalDays} hari\n`;
+      response += `• Rata-rata pengeluaran harian: ${this.formatRupiah(averageDaily)}`;
+
+      return response;
+
+    } catch (error) {
+      this.logger.error('Error in handleHariPalingHematQuery:', error);
+      return 'Maaf, terjadi kesalahan saat menganalisis hari paling hemat. Silakan coba lagi nanti.';
     }
   }
 

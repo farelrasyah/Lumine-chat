@@ -157,11 +157,7 @@ export class FinanceQAService {
     
     const hasTotal = /total|jumlah|berapa/.test(question);
     
-    // Additional patterns for enhanced matching
-    const hasPengeluaranKu = /pengeluaranku|pengeluaran.*ku|ku.*pengeluaran/.test(question);
-    const hasPengeluaranHari = /pengeluaran.*hari|hari.*pengeluaran/.test(question);
-    
-    return hasGeneralPengeluaran || hasTotal || hasPengeluaranKu || hasPengeluaranHari;
+    return hasGeneralPengeluaran || hasTotal;
   }
 
   private matchTerakhir(question: string): boolean {
@@ -637,7 +633,14 @@ export class FinanceQAService {
       /daftar.*(?:hari ini|minggu ini|bulan ini|tahun ini)/,
       /apa saja.*(?:hari ini|minggu ini|bulan ini|tahun ini)/,
       /kategori.*(?:makanan|transportasi|belanja|hiburan|kesehatan|pendidikan|utilitas|lainnya)/,
-      /pengeluaran.*(?:makanan|transportasi|belanja|hiburan|kesehatan|pendidikan|utilitas|lainnya)/
+      /pengeluaran.*(?:makanan|transportasi|belanja|hiburan|kesehatan|pendidikan|utilitas|lainnya)/,
+      // Pattern untuk hari paling boros/hemat
+      /hari\s+(paling\s+)?(boros|mahal|tinggi|besar)/,
+      /hari\s+(paling\s+)?(hemat|murah|rendah|kecil)/,
+      /hari\s+(ter)?(boros|mahal|hemat|murah)/,
+      /(paling\s+)?(boros|hemat)\s+hari/,
+      /kapan\s+(paling\s+)?(boros|hemat|mahal|murah)/,
+      /tanggal\s+berapa\s+(paling\s+)?(boros|hemat)/
     ];
 
     // Cek apakah cocok dengan pattern keuangan

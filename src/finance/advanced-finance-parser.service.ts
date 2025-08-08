@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { EnhancedDateService, TimeContext } from './enhanced-date.service';
 
 export interface AdvancedFinanceQuery {
-  intent: 'total' | 'category' | 'history' | 'comparison' | 'prediction' | 'budget' | 'pattern' | 'recommendation' | 'search' | 'goal' | 'reminder' | 'challenge' | 'simulation' | 'hari_paling_boros';
+  intent: 'total' | 'category' | 'history' | 'comparison' | 'prediction' | 'budget' | 'pattern' | 'recommendation' | 'search' | 'goal' | 'reminder' | 'challenge' | 'simulation' | 'hari_paling_boros' | 'hari_paling_hemat';
   timeContext?: TimeContext;
   category?: string;
   comparisonType?: 'month-to-month' | 'week-to-week' | 'year-to-year';
@@ -169,6 +169,17 @@ export class AdvancedFinanceParserService {
       const timeContext = this.dateService.parseTimeExpression(normalizedMessage);
       return {
         intent: 'hari_paling_boros',
+        timeContext: timeContext || undefined,
+        pengirim,
+        rawQuery: message
+      };
+    }
+
+    // Intent: Hari Paling Hemat
+    if (this.matchesHariPalingHemat(normalizedMessage)) {
+      const timeContext = this.dateService.parseTimeExpression(normalizedMessage);
+      return {
+        intent: 'hari_paling_hemat',
         timeContext: timeContext || undefined,
         pengirim,
         rawQuery: message
@@ -461,6 +472,21 @@ export class AdvancedFinanceParserService {
       /kapan\s+(paling\s+)?(boros|mahal)/,
       /tanggal\s+berapa\s+(paling\s+)?(boros|mahal)/,
       /(paling\s+)?(boros|mahal)\s+tanggal\s+berapa/
+    ];
+
+    return patterns.some(pattern => pattern.test(text));
+  }
+
+  private matchesHariPalingHemat(text: string): boolean {
+    const patterns = [
+      /hari\s+(paling\s+)?(hemat|murah|rendah|kecil)/,
+      /hari\s+(ter)?(hemat|murah|rendah)/,
+      /(paling\s+)?hemat\s+hari/,
+      /hari\s+(dengan\s+)?pengeluaran\s+(paling\s+)?(kecil|rendah|sedikit)/,
+      /hari\s+(yang\s+)?paling\s+(hemat|murah)/,
+      /kapan\s+(paling\s+)?(hemat|murah)/,
+      /tanggal\s+berapa\s+(paling\s+)?(hemat|murah)/,
+      /(paling\s+)?(hemat|murah)\s+tanggal\s+berapa/
     ];
 
     return patterns.some(pattern => pattern.test(text));
