@@ -53,6 +53,7 @@ export class WhatsAppService implements OnModuleInit {
       let typingSent = false;
       let typingMsg;
       let typingTimeout: NodeJS.Timeout | undefined;
+      
       // Mulai proses AI dan timeout bersamaan
       const aiPromise = this.messageProcessor.processMessage(msg);
       const timeoutPromise = new Promise<void>(resolve => {
@@ -62,21 +63,59 @@ export class WhatsAppService implements OnModuleInit {
           resolve();
         }, 1500);
       });
+      
       // Tunggu mana yang lebih dulu selesai: AI atau timeout
       const result = await Promise.race([aiPromise.then(() => 'ai'), timeoutPromise.then(() => 'timeout')]);
-      let reply, log;
+      let response, log;
+      
       if (result === 'ai') {
         // AI selesai duluan, batalkan timeout
         if (typingTimeout) clearTimeout(typingTimeout);
-        ({ reply, log } = await aiPromise);
+        response = await aiPromise;
       } else {
         // Timeout duluan, tunggu AI selesai
-        ({ reply, log } = await aiPromise);
+        response = await aiPromise;
       }
-      if (reply) {
-        await this.sock.sendMessage(msg.key.remoteJid, { text: reply }, { quoted: msg });
-        this.logger.log(log);
+
+      // Handle different response types
+      if (response) {
+        log = response.log;
+        
+        // If response includes an image (for chart commands)
+        if (response.image && response.imageCaption) {
+          // Delete typing message if sent
+          if (typingSent && typingMsg) {
+            try {
+              await this.sock.sendMessage(msg.key.remoteJid, { delete: typingMsg.key });
+            } catch (e) {
+              this.logger.warn('Could not delete typing message');
+            }
+          }
+          
+          // Send image with caption
+          await this.sock.sendMessage(msg.key.remoteJid, {
+            image: response.image,
+            caption: response.imageCaption
+          }, { quoted: msg });
+          
+          this.logger.log(log);
+        } 
+        // Standard text reply
+        else if (response.reply) {
+          // Delete typing message if sent
+          if (typingSent && typingMsg) {
+            try {
+              await this.sock.sendMessage(msg.key.remoteJid, { delete: typingMsg.key });
+            } catch (e) {
+              this.logger.warn('Could not delete typing message');
+            }
+          }
+          
+          await this.sock.sendMessage(msg.key.remoteJid, { text: response.reply }, { quoted: msg });
+          this.logger.log(log);
+        }
       }
+      
     } catch (e) {
       this.logger.error(`Error processing message: ${e}`);
       await this.sendMessage(msg.key.remoteJid, 'Maaf, Lumine sedang tidak bisa menjawab sekarang. Silakan coba beberapa saat lagi.', msg);

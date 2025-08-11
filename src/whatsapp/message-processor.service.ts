@@ -12,6 +12,8 @@ import { SheetService } from '../sheet/sheet.service';
 import { FinanceQAService } from '../finance/finance-qa.service';
 import { BudgetManagementService } from '../finance/budget-management.service';
 import { FinancialInsightService } from '../finance/financial-insight.service';
+import { ReportsService } from '../reports/reports.service';
+import { ChartsService } from '../charts/charts.service';
 
 @Injectable()
 export class MessageProcessorService {
@@ -24,9 +26,11 @@ export class MessageProcessorService {
     private readonly financeQAService: FinanceQAService,
     private readonly budgetService: BudgetManagementService,
     private readonly insightService: FinancialInsightService,
+    private readonly reportsService: ReportsService,
+    private readonly chartsService: ChartsService,
   ) {}
 
-  async processMessage(msg: any): Promise<{ reply: string | null; log: string }> {
+  async processMessage(msg: any): Promise<{ reply?: string | null; log: string; image?: Buffer; imageCaption?: string }> {
     const text = this.extractText(msg);
     if (!text) return { reply: null, log: '' };
     const match = text.match(/@lumine\b/i);
@@ -145,6 +149,21 @@ export class MessageProcessorService {
       // Format untuk prompt ke AI ala ChatGPT API
       const chatContext = messages.map((m: any) => ({ role: m.role, content: m.content }));
       chatContext.push({ role: 'user', content: prompt });
+
+      // Check for chart commands FIRST (before spending analysis)
+      if (this.isChartCommand(prompt)) {
+        try {
+          const chartResult = await this.handleChartCommand(prompt, pengirim, msg);
+          if (chartResult) {
+            return chartResult;
+          }
+        } catch (error) {
+          this.logger.error('Error processing chart command:', error);
+          const errorReply = 'Maaf, terjadi kesalahan saat membuat chart pengeluaran.';
+          await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
+          return { reply: errorReply, log: `Chart Error: ${error}` };
+        }
+      }
 
       // === FITUR ANALISIS PENGELUARAN (BOROS/HEMAT) ===
       if (this.isSpendingAnalysisQuestion(prompt)) {
@@ -532,6 +551,214 @@ export class MessageProcessorService {
     };
 
     return emojiMap[type] || '💡';
+  }
+
+  /**
+   * Check if the message is a chart-related command
+   */
+  private isChartCommand(prompt: string): boolean {
+    const normalizedPrompt = prompt.toLowerCase();
+    return normalizedPrompt.includes('chart pengeluaran') || 
+           normalizedPrompt.includes('grafik pengeluaran') ||
+           normalizedPrompt.includes('chart spending') ||
+           normalizedPrompt.includes('grafik spending');
+  }
+
+  /**
+   * Handle chart-related commands
+   */
+  private async handleChartCommand(prompt: string, pengirim: string, msg: any): Promise<{ reply: string | null; log: string; image?: Buffer; imageCaption?: string } | null> {
+    const normalizedPrompt = prompt.toLowerCase().trim();
+    const userNumber = msg.key?.remoteJid || msg.from || 'unknown';
+    
+    try {
+      // Parse period from command
+      const { from, to, periodLabel } = this.parseChartPeriod(normalizedPrompt);
+      
+      if (!from || !to) {
+        const helpText = `📊 Format perintah chart pengeluaran:\n\n` +
+          `• chart pengeluaran → bulan ini\n` +
+          `• chart pengeluaran minggu ini\n` +
+          `• chart pengeluaran hari ini\n` +
+          `• chart pengeluaran 2025-08 (YYYY-MM)\n` +
+          `• chart pengeluaran 2025-08-01 s.d 2025-08-31\n\n` +
+          `💡 Contoh: @lumine chart pengeluaran bulan ini`;
+        
+        await SupabaseService.saveMessage(userNumber, 'assistant', helpText);
+        return { reply: helpText, log: `Chart help provided` };
+      }
+
+      // Get spending data
+      const spendingData = await this.reportsService.getSpendingByCategory({
+        from,
+        to,
+        pengirim
+      });
+
+      if (!spendingData.labels.length || !spendingData.values.length) {
+        const noDataText = `📊 Chart Pengeluaran - ${periodLabel}\n\nBelum ada data pengeluaran pada periode tersebut.\n\nMulai catat pengeluaran Anda untuk melihat visualisasi yang menarik!`;
+        await SupabaseService.saveMessage(userNumber, 'assistant', noDataText);
+        return { reply: noDataText, log: `No spending data for period: ${periodLabel}` };
+      }
+
+      // Generate chart
+      const chartTitle = `📊 ${periodLabel} — Pengeluaran per Kategori`;
+      const chartBuffer = await this.chartsService.buildSpendingPiePng({
+        labels: spendingData.labels,
+        values: spendingData.values,
+        title: chartTitle,
+        highlightMax: true,
+        doughnut: true,
+        width: 1200,
+        height: 700
+      });
+
+      // Format total amount
+      const totalFormatted = new Intl.NumberFormat('id-ID', {
+        style: 'currency',
+        currency: 'IDR',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+      }).format(spendingData.total);
+
+      // Create detailed breakdown for caption
+      const categoryBreakdown = spendingData.labels
+        .map((label, index) => {
+          const value = spendingData.values[index];
+          const percentage = ((value / spendingData.total) * 100).toFixed(1);
+          const formatted = new Intl.NumberFormat('id-ID', {
+            style: 'currency',
+            currency: 'IDR',
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 0
+          }).format(value);
+          return `  • ${label}: ${formatted} (${percentage}%)`;
+        })
+        .slice(0, 5) // Show top 5 categories
+        .join('\n');
+
+      const imageCaption = `📊 *Chart Pengeluaran ${periodLabel}*\n\n` +
+        `💰 *Total Pengeluaran:* ${totalFormatted}\n\n` +
+        `� *Breakdown per Kategori:*\n${categoryBreakdown}` +
+        `${spendingData.labels.length > 5 ? '\n  • ...' : ''}\n\n` +
+        `⏰ Periode: ${periodLabel}\n` +
+        `📅 Generated: ${new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}\n\n` +
+        `💡 *Perintah lainnya:*\n` +
+        `• chart pengeluaran [hari ini|minggu ini|bulan ini]\n` +
+        `• chart pengeluaran [YYYY-MM] (contoh: 2025-08)\n` +
+        `• chart pengeluaran [tgl mulai] s.d [tgl akhir]`;
+
+      // Save success message to database
+      const successMessage = `Chart pengeluaran ${periodLabel} berhasil dibuat dengan total ${totalFormatted}`;
+      await SupabaseService.saveMessage(userNumber, 'assistant', successMessage);
+
+      return {
+        reply: null, // No text reply, only image
+        log: `Chart generated for ${periodLabel} - Total: ${totalFormatted}`,
+        image: chartBuffer,
+        imageCaption
+      };
+
+    } catch (error) {
+      this.logger.error('Error in handleChartCommand:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Parse chart period from command text
+   */
+  private parseChartPeriod(prompt: string): { from: string; to: string; periodLabel: string } {
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth();
+    const currentDate = today.getDate();
+
+    // Default case - bulan ini
+    if (!prompt.includes('hari ini') && 
+        !prompt.includes('minggu ini') && 
+        !prompt.match(/\d{4}-\d{2}/) && 
+        !prompt.match(/\d{4}-\d{2}-\d{2}/)) {
+      
+      const startOfMonth = new Date(currentYear, currentMonth, 1);
+      const endOfMonth = new Date(currentYear, currentMonth + 1, 0);
+      
+      return {
+        from: startOfMonth.toISOString().split('T')[0],
+        to: endOfMonth.toISOString().split('T')[0],
+        periodLabel: `${this.getMonthName(currentMonth)} ${currentYear}`
+      };
+    }
+
+    // Hari ini
+    if (prompt.includes('hari ini')) {
+      const todayStr = today.toISOString().split('T')[0];
+      return {
+        from: todayStr,
+        to: todayStr,
+        periodLabel: 'Hari Ini'
+      };
+    }
+
+    // Minggu ini
+    if (prompt.includes('minggu ini')) {
+      const startOfWeek = new Date(today);
+      const dayOfWeek = today.getDay();
+      const diff = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); // Adjust when day is Sunday
+      startOfWeek.setDate(diff);
+      
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+      
+      return {
+        from: startOfWeek.toISOString().split('T')[0],
+        to: endOfWeek.toISOString().split('T')[0],
+        periodLabel: 'Minggu Ini'
+      };
+    }
+
+    // Format YYYY-MM
+    const monthMatch = prompt.match(/(\d{4})-(\d{2})/);
+    if (monthMatch) {
+      const year = parseInt(monthMatch[1]);
+      const month = parseInt(monthMatch[2]) - 1; // JavaScript months are 0-indexed
+      
+      const startOfMonth = new Date(year, month, 1);
+      const endOfMonth = new Date(year, month + 1, 0);
+      
+      return {
+        from: startOfMonth.toISOString().split('T')[0],
+        to: endOfMonth.toISOString().split('T')[0],
+        periodLabel: `${this.getMonthName(month)} ${year}`
+      };
+    }
+
+    // Format range: YYYY-MM-DD s.d YYYY-MM-DD
+    const rangeMatch = prompt.match(/(\d{4}-\d{2}-\d{2})\s+s\.d\s+(\d{4}-\d{2}-\d{2})/);
+    if (rangeMatch) {
+      const fromDate = rangeMatch[1];
+      const toDate = rangeMatch[2];
+      
+      return {
+        from: fromDate,
+        to: toDate,
+        periodLabel: `${fromDate} s.d ${toDate}`
+      };
+    }
+
+    // Invalid format
+    return { from: '', to: '', periodLabel: '' };
+  }
+
+  /**
+   * Get month name in Indonesian
+   */
+  private getMonthName(monthIndex: number): string {
+    const monthNames = [
+      'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+    ];
+    return monthNames[monthIndex] || '';
   }
 
   /**
