@@ -151,10 +151,11 @@ export class MessageProcessorService {
         try {
           const spendingAnalysis = await this.handleSpendingAnalysisQuestion(prompt, pengirim);
           if (spendingAnalysis) {
-            await SupabaseService.saveMessage(userNumber, 'assistant', spendingAnalysis);
-            this.history.push({ prompt, response: spendingAnalysis });
-            this.logger.log(`Spending Analysis Q: ${prompt}\nA: ${spendingAnalysis}`);
-            return { reply: spendingAnalysis, log: `Spending Analysis Q: ${prompt}\nA: ${spendingAnalysis}` };
+            const cleanResponse = this.cleanMarkdownSymbols(spendingAnalysis);
+            await SupabaseService.saveMessage(userNumber, 'assistant', cleanResponse);
+            this.history.push({ prompt, response: cleanResponse });
+            this.logger.log(`Spending Analysis Q: ${prompt}\nA: ${cleanResponse}`);
+            return { reply: cleanResponse, log: `Spending Analysis Q: ${prompt}\nA: ${cleanResponse}` };
           }
         } catch (error) {
           this.logger.error('Error processing spending analysis:', error);
@@ -201,10 +202,11 @@ export class MessageProcessorService {
         try {
           const budgetResponse = await this.handleBudgetCommand(prompt, pengirim);
           if (budgetResponse) {
-            await SupabaseService.saveMessage(userNumber, 'assistant', budgetResponse);
-            this.history.push({ prompt, response: budgetResponse });
-            this.logger.log(`Budget Q: ${prompt}\nA: ${budgetResponse}`);
-            return { reply: budgetResponse, log: `Budget Q: ${prompt}\nA: ${budgetResponse}` };
+            const cleanResponse = this.cleanMarkdownSymbols(budgetResponse);
+            await SupabaseService.saveMessage(userNumber, 'assistant', cleanResponse);
+            this.history.push({ prompt, response: cleanResponse });
+            this.logger.log(`Budget Q: ${prompt}\nA: ${cleanResponse}`);
+            return { reply: cleanResponse, log: `Budget Q: ${prompt}\nA: ${cleanResponse}` };
           }
         } catch (error) {
           this.logger.error('Error processing budget command:', error);
@@ -216,10 +218,11 @@ export class MessageProcessorService {
         try {
           const insightResponse = await this.handleInsightCommand(prompt, pengirim);
           if (insightResponse) {
-            await SupabaseService.saveMessage(userNumber, 'assistant', insightResponse);
-            this.history.push({ prompt, response: insightResponse });
-            this.logger.log(`Insight Q: ${prompt}\nA: ${insightResponse}`);
-            return { reply: insightResponse, log: `Insight Q: ${prompt}\nA: ${insightResponse}` };
+            const cleanResponse = this.cleanMarkdownSymbols(insightResponse);
+            await SupabaseService.saveMessage(userNumber, 'assistant', cleanResponse);
+            this.history.push({ prompt, response: cleanResponse });
+            this.logger.log(`Insight Q: ${prompt}\nA: ${cleanResponse}`);
+            return { reply: cleanResponse, log: `Insight Q: ${prompt}\nA: ${cleanResponse}` };
           }
         } catch (error) {
           this.logger.error('Error processing insight command:', error);
@@ -231,10 +234,11 @@ export class MessageProcessorService {
         try {
           const financeResponse = await this.financeQAService.processFinanceQuestion(prompt, pengirim);
           if (financeResponse) {
-            await SupabaseService.saveMessage(userNumber, 'assistant', financeResponse);
-            this.history.push({ prompt, response: financeResponse });
-            this.logger.log(`Finance Q: ${prompt}\nA: ${financeResponse}`);
-            return { reply: financeResponse, log: `Finance Q: ${prompt}\nA: ${financeResponse}` };
+            const cleanResponse = this.cleanMarkdownSymbols(financeResponse);
+            await SupabaseService.saveMessage(userNumber, 'assistant', cleanResponse);
+            this.history.push({ prompt, response: cleanResponse });
+            this.logger.log(`Finance Q: ${prompt}\nA: ${cleanResponse}`);
+            return { reply: cleanResponse, log: `Finance Q: ${prompt}\nA: ${cleanResponse}` };
           }
         } catch (error) {
           this.logger.error('Error processing finance question:', error);
@@ -246,8 +250,8 @@ export class MessageProcessorService {
 
       // Kirim konteks chat ke AI
       const aiResponse = await this.queryAIWithContext(chatContext);
-      // Bersihkan simbol markdown
-      const cleanResponse = this.stripMarkdown(aiResponse);
+      // Bersihkan simbol markdown dan simbol formatting lainnya
+      const cleanResponse = this.cleanMarkdownSymbols(this.stripMarkdown(aiResponse));
       await SupabaseService.saveMessage(userNumber, 'assistant', cleanResponse);
       this.history.push({ prompt, response: cleanResponse });
       this.logger.log(`Q: ${prompt}\nA: ${cleanResponse}`);
@@ -266,6 +270,30 @@ export class MessageProcessorService {
     if (msg.message?.conversation) return msg.message.conversation;
     if (msg.message?.extendedTextMessage?.text) return msg.message.extendedTextMessage.text;
     return null;
+  }
+
+  /**
+   * Clean all markdown symbols from text to ensure plain text output
+   */
+  private cleanMarkdownSymbols(text: string): string {
+    if (!text) return text;
+    
+    // Remove all markdown formatting symbols
+    return text
+      .replace(/\*\*/g, '') // Remove bold **text**
+      .replace(/\*/g, '')   // Remove italic *text*
+      .replace(/__/g, '')   // Remove bold __text__
+      .replace(/_/g, '')    // Remove italic _text_
+      .replace(/~/g, '')    // Remove strikethrough ~text~
+      .replace(/`/g, '')    // Remove code `text`
+      .replace(/#{1,6}\s/g, '') // Remove headers # text
+      .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1') // Convert links to plain text
+      .replace(/^\s*[-*+]\s/gm, '• ') // Convert markdown lists to bullet points
+      .replace(/^\s*\d+\.\s/gm, '') // Remove numbered list formatting
+      .replace(/>\s*/gm, '') // Remove blockquote symbols
+      .replace(/\|\s*/g, '') // Remove table separators
+      .replace(/---+/g, '') // Remove horizontal rules
+      .trim();
   }
 
   // Fungsi baru: queryAIWithContext menerima array messages ala ChatGPT API
@@ -613,10 +641,10 @@ export class MessageProcessorService {
 
           response += `💡 **Untuk reply:** Ketik "reply search ${keyword} [pesan reply Anda]"`;
           
-          return response;
+          return this.cleanMarkdownSymbols(response);
 
         } catch (error) {
-          return `❌ **Pencarian Gagal:**\n\n${error.message}`;
+          return this.cleanMarkdownSymbols(`❌ **Pencarian Gagal:**\n\n${error.message}`);
         }
       }
     }
@@ -637,13 +665,13 @@ export class MessageProcessorService {
             { test_search_reply: true, search_keyword: keyword }
           );
 
-          return `✅ **Search Reply Berhasil!**\n\n` +
+          return this.cleanMarkdownSymbols(`✅ **Search Reply Berhasil!**\n\n` +
                  `🔍 Keyword: "${keyword}"\n` +
                  `📤 Reply: "${replyContent}"\n\n` +
-                 `🔗 Reply tersimpan dengan relasi ke pesan yang ditemukan!`;
+                 `🔗 Reply tersimpan dengan relasi ke pesan yang ditemukan!`);
 
         } catch (error) {
-          return `❌ **Search Reply Gagal:**\n\n${error.message}`;
+          return this.cleanMarkdownSymbols(`❌ **Search Reply Gagal:**\n\n${error.message}`);
         }
       }
     }
@@ -657,15 +685,15 @@ export class MessageProcessorService {
           { topic: 'testing', created_via: 'whatsapp_command' }
         );
 
-        return `🧵 **Thread Baru Dibuat!**\n\n` +
+        return this.cleanMarkdownSymbols(`🧵 **Thread Baru Dibuat!**\n\n` +
                `📝 Conversation ID: ${conversationId.substring(0, 8)}...\n` +
                `💬 Pesan awal: "Thread testing untuk fitur conversation"\n\n` +
                `💡 **Testing lanjutan:**\n` +
                `• Semua pesan selanjutnya bisa dikaitkan ke thread ini\n` +
-               `• Ketik "lihat thread" untuk melihat semua thread Anda`;
+               `• Ketik "lihat thread" untuk melihat semua thread Anda`);
 
       } catch (error) {
-        return `❌ **Thread Gagal Dibuat:**\n\n${error.message}`;
+        return this.cleanMarkdownSymbols(`❌ **Thread Gagal Dibuat:**\n\n${error.message}`);
       }
     }
 
@@ -676,7 +704,7 @@ export class MessageProcessorService {
         const threadIds = Object.keys(threads);
 
         if (threadIds.length === 0) {
-          return `🧵 **Thread Conversations:**\n\nBelum ada thread conversation. Ketik "test thread baru" untuk membuat thread pertama!`;
+          return this.cleanMarkdownSymbols(`🧵 **Thread Conversations:**\n\nBelum ada thread conversation. Ketik "test thread baru" untuk membuat thread pertama!`);
         }
 
         let response = `🧵 **Thread Conversations (${threadIds.length}):**\n\n`;
@@ -693,15 +721,15 @@ export class MessageProcessorService {
           response += `   📝 "${latestMessage.content.substring(0, 40)}..."\n\n`;
         });
 
-        return response;
+        return this.cleanMarkdownSymbols(response);
 
       } catch (error) {
-        return `❌ **Thread Load Gagal:**\n\n${error.message}`;
+        return this.cleanMarkdownSymbols(`❌ **Thread Load Gagal:**\n\n${error.message}`);
       }
     }
 
     // Default help
-    return `🧪 **Testing Reply Features:**\n\n` +
+    return this.cleanMarkdownSymbols(`🧪 **Testing Reply Features:**\n\n` +
            `📋 **Perintah yang tersedia:**\n` +
            `• "lihat pesan terbaru" - Lihat 10 pesan terbaru\n` +
            `• "reply ke pesan [index] [pesan]" - Reply ke pesan\n` +
@@ -711,7 +739,7 @@ export class MessageProcessorService {
            `• "lihat thread" - Lihat semua thread\n\n` +
            `💡 **Contoh:**\n` +
            `"reply ke pesan 2 Terima kasih!" - Reply ke pesan index 2\n` +
-           `"cari pesan budget" - Cari pesan berisi "budget"`;
+           `"cari pesan budget" - Cari pesan berisi "budget"`);
   }
 
   /**
@@ -876,7 +904,7 @@ export class MessageProcessorService {
           // Continue with response even if database fails
         }
 
-        return `💬 **Re:** ${replyInfo.quotedText.substring(0, 30)}...\n\n${cleanResponse}`;
+        return `💬 Re: ${replyInfo.quotedText.substring(0, 30)}...\n\n${this.cleanMarkdownSymbols(cleanResponse)}`;
       }
 
       // Fallback for reply patterns in text
@@ -1114,9 +1142,11 @@ export class MessageProcessorService {
     }
 
     // Insights and recommendations
-    response += this.generateSpendingInsights(spendingLevel, isAboveAverage, categoryBreakdown, timeframe);
+    const insights = this.generateSpendingInsights(spendingLevel, isAboveAverage, categoryBreakdown, timeframe);
+    response += insights;
     
-    return response;
+    // Clean all markdown symbols before returning
+    return this.cleanMarkdownSymbols(response);
   }
 
   /**
