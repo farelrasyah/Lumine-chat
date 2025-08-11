@@ -330,4 +330,56 @@ export class PdfGeneratorService {
       throw new Error(`Failed to get financial data: ${error.message}`);
     }
   }
+
+  /**
+   * Get financial report data by custom date range
+   */
+  async getFinancialReportDataByDateRange(
+    userId: string, 
+    startDate: string, 
+    endDate: string, 
+    periodLabel: string
+  ): Promise<FinancialReportData> {
+    try {
+      // Get transactions - filter by 'pengirim' not 'user_id'
+      const { data: transactions, error } = await SupabaseService.getClient()
+        .from('transactions')
+        .select('*')
+        .eq('pengirim', userId)
+        .gte('tanggal', startDate)
+        .lte('tanggal', endDate)
+        .order('tanggal', { ascending: false });
+
+      if (error) throw error;
+
+      const validTransactions = transactions || [];
+      const totalExpense = validTransactions.reduce((sum, t) => sum + (t.nominal || 0), 0);
+
+      // Category breakdown
+      const categoryMap = new Map<string, number>();
+      validTransactions.forEach(t => {
+        const category = t.kategori || 'Lainnya';
+        categoryMap.set(category, (categoryMap.get(category) || 0) + (t.nominal || 0));
+      });
+
+      const categoryBreakdown = Array.from(categoryMap.entries())
+        .map(([category, amount]) => ({
+          category,
+          amount,
+          percentage: totalExpense > 0 ? (amount / totalExpense) * 100 : 0
+        }))
+        .sort((a, b) => b.amount - a.amount);
+
+      return {
+        transactions: validTransactions,
+        period: periodLabel,
+        totalExpense,
+        categoryBreakdown,
+        userId: userId,
+        userName: userId || 'User'
+      };
+    } catch (error) {
+      throw new Error(`Failed to get financial data by date range: ${error.message}`);
+    }
+  }
 }

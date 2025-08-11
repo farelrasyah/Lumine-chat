@@ -1996,57 +1996,40 @@ export class MessageProcessorService {
     const userNumber = msg.key?.remoteJid || msg.from || 'unknown';
     
     try {
-      // Extract period from prompt
-      let period: 'today' | 'week' | 'month' = 'month';
-      if (/hari.*ini|today|harian/i.test(prompt)) {
-        period = 'today';
-      } else if (/minggu|week|mingguan|7.*hari/i.test(prompt)) {
-        period = 'week';
-      } else if (/bulan|month|bulanan|30.*hari/i.test(prompt)) {
-        period = 'month';
-      }
-
-      this.logger.log(`Generating PDF report for period: ${period}`);
-
-      // Get financial report data
-      const reportData = await this.pdfService.getFinancialReportData(pengirim, period);
+      // Enhanced period detection
+      const periodInfo = this.parsePdfReportPeriod(prompt);
       
-      // Generate PDF
-      const pdfBuffer = await this.pdfService.generateFinancialReportPdf(reportData);
+      this.logger.log(`Generating PDF report for period: ${periodInfo.type}, range: ${periodInfo.startDate} to ${periodInfo.endDate}`);
 
-      let periodText = '';
-      switch (period) {
-        case 'today':
-          periodText = 'hari ini';
-          break;
-        case 'week':
-          periodText = '7 hari terakhir';
-          break;
-        case 'month':
-          periodText = 'bulan ini';
-          break;
-      }
+      // Get financial report data with custom date range
+      const reportData = await this.pdfService.getFinancialReportDataByDateRange(
+        pengirim, 
+        periodInfo.startDate, 
+        periodInfo.endDate,
+        periodInfo.label
+      );
+      
+      // Generate PDF with period-specific filename
+      const pdfBuffer = await this.pdfService.generateFinancialReportPdf(reportData);
+      const filename = this.generatePdfFilename(periodInfo.label);
 
       const caption = `📋 **LAPORAN KEUANGAN PDF**\n\n` +
         `📅 **Periode**: ${reportData.period}\n` +
         `💰 **Total Pengeluaran**: ${this.formatRupiah(reportData.totalExpense)}\n` +
         `🧾 **Jumlah Transaksi**: ${reportData.transactions.length}\n` +
         `📊 **Kategori**: ${reportData.categoryBreakdown.length}\n\n` +
-        `📎 File PDF berisi:\n` +
-        `• Ringkasan pengeluaran\n` +
-        `• Breakdown per kategori\n` +
-        `• Detail transaksi\n` +
-        `• Grafik visual\n\n` +
+        `📎 File: ${filename}\n` +
+        `📄 Berisi: Ringkasan, breakdown kategori, detail transaksi\n\n` +
         `💼 Siap untuk arsip atau presentasi!`;
 
       // Save messages
       await SupabaseService.saveMessage(userNumber, 'user', prompt);
-      await SupabaseService.saveMessage(userNumber, 'assistant', `Laporan keuangan PDF untuk ${periodText} telah dibuat`);
+      await SupabaseService.saveMessage(userNumber, 'assistant', `Laporan keuangan PDF untuk ${periodInfo.label} telah dibuat`);
 
       return {
         image: pdfBuffer,
         imageCaption: caption,
-        log: `PDF Report generated for ${pengirim} - Period: ${period}, Transactions: ${reportData.transactions.length}, Total: ${this.formatRupiah(reportData.totalExpense)}`
+        log: `PDF Report generated for ${pengirim} - Period: ${periodInfo.label}, Transactions: ${reportData.transactions.length}, Total: ${this.formatRupiah(reportData.totalExpense)}`
       };
 
     } catch (error) {
@@ -2069,6 +2052,155 @@ export class MessageProcessorService {
         log: `PDF Report Error for ${pengirim}: ${error.message}`
       };
     }
+  }
+
+  /**
+   * Parse PDF report period with support for relative and absolute dates
+   */
+  private parsePdfReportPeriod(prompt: string): {
+    type: string;
+    startDate: string;
+    endDate: string;
+    label: string;
+  } {
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth();
+    
+    // Relative periods - "lalu" patterns
+    if (/bulan\s+lalu/i.test(prompt)) {
+      const lastMonth = new Date(currentYear, currentMonth - 1, 1);
+      const lastMonthEnd = new Date(currentYear, currentMonth, 0);
+      return {
+        type: 'last_month',
+        startDate: lastMonth.toISOString().split('T')[0],
+        endDate: lastMonthEnd.toISOString().split('T')[0],
+        label: `${this.getMonthName(lastMonth.getMonth())} ${lastMonth.getFullYear()}`
+      };
+    }
+    
+    if (/minggu\s+lalu/i.test(prompt)) {
+      const lastWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const startOfLastWeek = new Date(lastWeek);
+      startOfLastWeek.setDate(lastWeek.getDate() - lastWeek.getDay() + 1); // Monday
+      const endOfLastWeek = new Date(startOfLastWeek);
+      endOfLastWeek.setDate(startOfLastWeek.getDate() + 6); // Sunday
+      
+      return {
+        type: 'last_week',
+        startDate: startOfLastWeek.toISOString().split('T')[0],
+        endDate: endOfLastWeek.toISOString().split('T')[0],
+        label: `Minggu Lalu (${startOfLastWeek.getDate()}-${endOfLastWeek.getDate()} ${this.getMonthName(startOfLastWeek.getMonth())})`
+      };
+    }
+
+    if (/dua\s+bulan\s+lalu|2\s+bulan\s+lalu/i.test(prompt)) {
+      const twoMonthsAgo = new Date(currentYear, currentMonth - 2, 1);
+      const twoMonthsAgoEnd = new Date(currentYear, currentMonth - 1, 0);
+      return {
+        type: 'two_months_ago',
+        startDate: twoMonthsAgo.toISOString().split('T')[0],
+        endDate: twoMonthsAgoEnd.toISOString().split('T')[0],
+        label: `${this.getMonthName(twoMonthsAgo.getMonth())} ${twoMonthsAgo.getFullYear()}`
+      };
+    }
+
+    // Absolute periods - specific months/years
+    const absoluteMonthMatch = prompt.match(/(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)\s+(\d{4})/i);
+    if (absoluteMonthMatch) {
+      const monthName = absoluteMonthMatch[1].toLowerCase();
+      const year = parseInt(absoluteMonthMatch[2]);
+      const monthIndex = this.getMonthIndex(monthName);
+      
+      const startDate = new Date(year, monthIndex, 1);
+      const endDate = new Date(year, monthIndex + 1, 0);
+      
+      return {
+        type: 'absolute_month',
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0],
+        label: `${this.getMonthName(monthIndex)} ${year}`
+      };
+    }
+
+    // Date ranges - "1-15 Juni 2025" format
+    const dateRangeMatch = prompt.match(/(\d{1,2})\s*[-–]\s*(\d{1,2})\s+(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)\s+(\d{4})/i);
+    if (dateRangeMatch) {
+      const startDay = parseInt(dateRangeMatch[1]);
+      const endDay = parseInt(dateRangeMatch[2]);
+      const monthName = dateRangeMatch[3].toLowerCase();
+      const year = parseInt(dateRangeMatch[4]);
+      const monthIndex = this.getMonthIndex(monthName);
+      
+      const startDate = new Date(year, monthIndex, startDay);
+      const endDate = new Date(year, monthIndex, endDay);
+      
+      return {
+        type: 'date_range',
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0],
+        label: `${startDay}-${endDay} ${this.getMonthName(monthIndex)} ${year}`
+      };
+    }
+
+    // Current period patterns
+    if (/hari.*ini|today|harian/i.test(prompt)) {
+      const todayStr = today.toISOString().split('T')[0];
+      return {
+        type: 'today',
+        startDate: todayStr,
+        endDate: todayStr,
+        label: 'Hari Ini'
+      };
+    }
+
+    if (/minggu.*ini|week|mingguan/i.test(prompt)) {
+      const startOfWeek = new Date(today);
+      const dayOfWeek = today.getDay();
+      const diff = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+      startOfWeek.setDate(diff);
+      
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+      
+      return {
+        type: 'this_week',
+        startDate: startOfWeek.toISOString().split('T')[0],
+        endDate: endOfWeek.toISOString().split('T')[0],
+        label: 'Minggu Ini'
+      };
+    }
+
+    // Default to current month
+    const startOfMonth = new Date(currentYear, currentMonth, 1);
+    const endOfMonth = new Date(currentYear, currentMonth + 1, 0);
+    
+    return {
+      type: 'current_month',
+      startDate: startOfMonth.toISOString().split('T')[0],
+      endDate: endOfMonth.toISOString().split('T')[0],
+      label: `${this.getMonthName(currentMonth)} ${currentYear}`
+    };
+  }
+
+  /**
+   * Get month index from Indonesian month name
+   */
+  private getMonthIndex(monthName: string): number {
+    const months = {
+      'januari': 0, 'februari': 1, 'maret': 2, 'april': 3,
+      'mei': 4, 'juni': 5, 'juli': 6, 'agustus': 7,
+      'september': 8, 'oktober': 9, 'november': 10, 'desember': 11
+    };
+    return months[monthName.toLowerCase()] || 0;
+  }
+
+  /**
+   * Generate filename for PDF based on period
+   */
+  private generatePdfFilename(periodLabel: string): string {
+    const cleanLabel = periodLabel.replace(/\s/g, '_').replace(/[^\w-]/g, '');
+    return `Laporan_Keuangan_${cleanLabel}.pdf`;
   }
 
   /**
