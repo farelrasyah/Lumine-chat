@@ -146,9 +146,29 @@ export class MessageProcessorService {
       const chatContext = messages.map((m: any) => ({ role: m.role, content: m.content }));
       chatContext.push({ role: 'user', content: prompt });
 
-      // Deteksi pertanyaan tentang identitas/fungsi
+      // === FITUR ANALISIS PENGELUARAN (BOROS/HEMAT) ===
+      if (this.isSpendingAnalysisQuestion(prompt)) {
+        try {
+          const spendingAnalysis = await this.handleSpendingAnalysisQuestion(prompt, pengirim);
+          if (spendingAnalysis) {
+            await SupabaseService.saveMessage(userNumber, 'assistant', spendingAnalysis);
+            this.history.push({ prompt, response: spendingAnalysis });
+            this.logger.log(`Spending Analysis Q: ${prompt}\nA: ${spendingAnalysis}`);
+            return { reply: spendingAnalysis, log: `Spending Analysis Q: ${prompt}\nA: ${spendingAnalysis}` };
+          }
+        } catch (error) {
+          this.logger.error('Error processing spending analysis:', error);
+          const errorReply = 'Maaf, terjadi kesalahan saat menganalisis pola pengeluaran Anda.';
+          await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
+          return { reply: errorReply, log: `Spending Analysis Error: ${error}` };
+        }
+      }
+
+      // Deteksi pertanyaan tentang identitas/fungsi (tapi exclude pertanyaan keuangan)
       const identitasRegex = /^(siapa|siapakah|siapa kah|apakah|kenapa|apa|tolong)?\s*(kamu|anda|lumine|fungsi(mu)?|tugas(mu)?|siapakah|siapa kah|apakah|peran(mu)?|tentangmu|tentang lumine|who are you|what are you|your function|your role|describe yourself)/i;
-      if (identitasRegex.test(prompt)) {
+      const isFinancialQuestion = this.containsFinancialKeywords(prompt);
+      
+      if (identitasRegex.test(prompt) && !isFinancialQuestion) {
         const personalReply = 'Saya Lumine, asisten pribadi Farel Rasyah, siap membantu berbagai keperluan Anda.';
         await SupabaseService.saveMessage(userNumber, 'assistant', personalReply);
         this.history.push({ prompt, response: personalReply });
@@ -354,19 +374,19 @@ export class MessageProcessorService {
     if (normalizedPrompt.includes('status') || normalizedPrompt.includes('cek') || normalizedPrompt.includes('budget saya')) {
       const budgets = await this.budgetService.getBudgets(pengirim);
       if (budgets.length === 0) {
-        return `💼 **Status Budget:**\n\nAnda belum menetapkan budget. Gunakan perintah seperti:\n• "set batas bulanan 2 juta"\n• "budget makanan 500 ribu per bulan"\n\nUntuk mulai mengatur keuangan Anda!`;
+        return `💼 Status Budget:\n\nAnda belum menetapkan budget. Gunakan perintah seperti:\n• "set batas bulanan 2 juta"\n• "budget makanan 500 ribu per bulan"\n\nUntuk mulai mengatur keuangan Anda!`;
       }
 
       const alerts = await this.budgetService.checkBudgets(pengirim);
       if (alerts.length > 0) {
-        let response = `💼 **Status Budget:**\n\n`;
+        let response = `💼 Status Budget:\n\n`;
         alerts.forEach(alert => {
           const emoji = alert.alertLevel === 'exceeded' ? '🚨' : alert.alertLevel === 'danger' ? '⚠️' : '✅';
           response += `${emoji} ${alert.message}\n`;
         });
         return response;
       } else {
-        return `✅ **Status Budget:**\n\nSemua budget Anda masih dalam batas aman! Lanjutkan kebiasaan baik ini.`;
+        return `✅ Status Budget:\n\nSemua budget Anda masih dalam batas aman! Lanjutkan kebiasaan baik ini.`;
       }
     }
 
@@ -415,14 +435,14 @@ export class MessageProcessorService {
       const insights = await this.insightService.generateInsights(pengirim, timeframe);
       
       if (insights.length === 0) {
-        return `🧠 **Analisis Keuangan:**\n\nBelum ada cukup data untuk menganalisis pola pengeluaran Anda. Catat beberapa transaksi terlebih dahulu untuk mendapatkan insight yang lebih akurat.`;
+        return `🧠 Analisis Keuangan:\n\nBelum ada cukup data untuk menganalisis pola pengeluaran Anda. Catat beberapa transaksi terlebih dahulu untuk mendapatkan insight yang lebih akurat.`;
       }
 
-      let response = `🧠 **Analisis Keuangan ${timeframe === 'week' ? 'Mingguan' : 'Bulanan'}:**\n\n`;
+      let response = `🧠 Analisis Keuangan ${timeframe === 'week' ? 'Mingguan' : 'Bulanan'}:\n\n`;
       
       insights.slice(0, 5).forEach((insight, index) => {
         const emoji = this.getInsightEmoji(insight.type);
-        response += `${emoji} **${insight.title}**\n${insight.message}\n\n`;
+        response += `${emoji} ${insight.title}\n${insight.message}\n\n`;
       });
 
       response += `💡 Ketik "rekomendasi hemat" untuk tips penghematan personal!`;
@@ -441,10 +461,10 @@ export class MessageProcessorService {
       const notifications = await this.insightService.detectUnusualSpending(pengirim);
       
       if (notifications.length === 0) {
-        return `✅ **Deteksi Pengeluaran:**\n\nTidak ada pola pengeluaran yang tidak biasa terdeteksi. Pengeluaran Anda terlihat konsisten!`;
+        return `✅ Deteksi Pengeluaran:\n\nTidak ada pola pengeluaran yang tidak biasa terdeteksi. Pengeluaran Anda terlihat konsisten!`;
       }
 
-      let response = `⚠️ **Deteksi Pengeluaran Tidak Biasa:**\n\n`;
+      let response = `⚠️ Deteksi Pengeluaran Tidak Biasa:\n\n`;
       notifications.forEach(notif => {
         response += `• ${notif.message}\n`;
       });
@@ -457,10 +477,10 @@ export class MessageProcessorService {
       const tips = await this.insightService.generatePersonalizedTips(pengirim);
       
       if (tips.length === 0) {
-        return `💡 **Tips Keuangan:**\n\nBelum ada tips spesifik yang bisa diberikan. Lakukan lebih banyak transaksi untuk mendapatkan rekomendasi yang lebih personal!`;
+        return `💡 Tips Keuangan:\n\nBelum ada tips spesifik yang bisa diberikan. Lakukan lebih banyak transaksi untuk mendapatkan rekomendasi yang lebih personal!`;
       }
 
-      let response = `💡 **Tips Keuangan Personal:**\n\n`;
+      let response = `💡 Tips Keuangan Personal:\n\n`;
       tips.forEach(tip => {
         response += `• ${tip.message}\n\n`;
       });
@@ -512,10 +532,10 @@ export class MessageProcessorService {
       const recentMessages = await SupabaseService.getRecentMessagesWithIds(userNumber, 10);
       
       if (recentMessages.length === 0) {
-        return `📋 **Pesan Terbaru:**\n\nBelum ada pesan tersimpan untuk testing reply.`;
+        return `📋 Pesan Terbaru:\n\nBelum ada pesan tersimpan untuk testing reply.`;
       }
 
-      let response = `📋 **10 Pesan Terbaru (untuk testing reply):**\n\n`;
+      let response = `📋 10 Pesan Terbaru (untuk testing reply):\n\n`;
       
       recentMessages.forEach((msg, index) => {
         const shortContent = msg.content.length > 50 ? 
@@ -527,7 +547,7 @@ export class MessageProcessorService {
         response += `   📝 ID: ${msg.id.substring(0, 8)}... | ⏰ ${timeAgo}\n\n`;
       });
 
-      response += `💡 **Cara testing:**\n`;
+      response += `💡 Cara testing:\n`;
       response += `• "reply ke pesan 2 [pesan Anda]" - Reply ke pesan index 2\n`;
       response += `• "cari pesan budget" - Cari pesan berisi kata budget\n`;
       response += `• "test thread baru" - Buat conversation baru`;
@@ -555,13 +575,13 @@ export class MessageProcessorService {
           const recentMessages = await SupabaseService.getRecentMessagesWithIds(userNumber, messageIndex + 1);
           const repliedMsg = recentMessages[messageIndex];
           
-          return `✅ **Reply Berhasil!**\n\n` +
+          return `✅ Reply Berhasil!\n\n` +
                  `📤 Reply Anda: "${replyContent}"\n` +
                  `📥 Ke pesan: "${repliedMsg.content.substring(0, 50)}..."\n\n` +
                  `🔗 Reply tersimpan dengan relasi ke pesan asli!`;
 
         } catch (error) {
-          return `❌ **Reply Gagal:**\n\n${error.message}`;
+          return `❌ Reply Gagal:\n\n${error.message}`;
         }
       }
     }
@@ -576,7 +596,7 @@ export class MessageProcessorService {
           const foundMessages = await SupabaseService.findOldMessageByContent(userNumber, keyword, 7);
           
           if (foundMessages.length === 0) {
-            return `🔍 **Hasil Pencarian:**\n\nTidak ada pesan yang mengandung "${keyword}" dalam 7 hari terakhir.`;
+            return `🔍 Hasil Pencarian:\n\nTidak ada pesan yang mengandung "${keyword}" dalam 7 hari terakhir.`;
           }
 
           let response = `🔍 **Hasil Pencarian untuk "${keyword}":**\n\n`;
@@ -922,5 +942,364 @@ export class MessageProcessorService {
 
     // Generic contextual response
     return `💬 Mengenai hal tersebut, ada yang bisa saya bantu lebih lanjut? Saya siap membantu dengan pertanyaan keuangan Anda.`;
+  }
+
+  /**
+   * Check if the prompt is a spending analysis question
+   */
+  private isSpendingAnalysisQuestion(prompt: string): boolean {
+    const spendingKeywords = [
+      // Boros patterns
+      'boros', 'pemborosan', 'terlalu banyak', 'kebanyakan', 
+      'over budget', 'melebihi budget', 'budget terlampaui',
+      
+      // Hemat patterns  
+      'hemat', 'irit', 'berhemat', 'mengirit', 'penghematan',
+      'under budget', 'di bawah budget', 'budget aman',
+      
+      // Analysis patterns
+      'pola pengeluaran', 'analisis pengeluaran', 'spending pattern',
+      'keuangan ku', 'keuangan saya', 'finansial ku', 'finansial saya',
+      
+      // Time-based spending questions
+      'pengeluaran hari ini', 'pengeluaran minggu ini', 'pengeluaran bulan ini',
+      'pengeluaran tahun ini', 'spending today', 'spending this week',
+      'spending this month', 'spending this year'
+    ];
+
+    const timeframes = [
+      'hari ini', 'minggu ini', 'bulan ini', 'tahun ini',
+      'today', 'this week', 'this month', 'this year',
+      'harian', 'mingguan', 'bulanan', 'tahunan'
+    ];
+
+    const normalizedPrompt = prompt.toLowerCase();
+    
+    // Check for direct spending keywords
+    const hasSpendingKeyword = spendingKeywords.some(keyword => 
+      normalizedPrompt.includes(keyword)
+    );
+
+    // Check for spending questions with personal pronouns
+    const personalSpendingPattern = /\b(aku|saya|ku|gue|gua|i|my)\s+(boros|hemat|pengeluaran|spending|budget)\b/i;
+    const spendingWithTime = timeframes.some(time => normalizedPrompt.includes(time)) && 
+                           (normalizedPrompt.includes('boros') || 
+                            normalizedPrompt.includes('hemat') || 
+                            normalizedPrompt.includes('pengeluaran'));
+
+    return hasSpendingKeyword || personalSpendingPattern.test(prompt) || spendingWithTime;
+  }
+
+  /**
+   * Handle spending analysis questions
+   */
+  private async handleSpendingAnalysisQuestion(prompt: string, pengirim: string): Promise<string | null> {
+    try {
+      const normalizedPrompt = prompt.toLowerCase();
+      
+      // Determine timeframe
+      let timeframe: 'daily' | 'weekly' | 'monthly' | 'yearly' = 'monthly'; // default
+      let startDate: string | undefined;
+      let endDate: string | undefined;
+      
+      const now = new Date();
+      const today = now.toISOString().split('T')[0];
+      
+      if (normalizedPrompt.includes('hari ini') || normalizedPrompt.includes('today') || normalizedPrompt.includes('harian')) {
+        timeframe = 'daily';
+        startDate = today;
+        endDate = today;
+      } else if (normalizedPrompt.includes('minggu ini') || normalizedPrompt.includes('this week') || normalizedPrompt.includes('mingguan')) {
+        timeframe = 'weekly';
+        const monday = new Date(now);
+        monday.setDate(now.getDate() - now.getDay() + 1); // Get Monday
+        startDate = monday.toISOString().split('T')[0];
+        endDate = today;
+      } else if (normalizedPrompt.includes('tahun ini') || normalizedPrompt.includes('this year') || normalizedPrompt.includes('tahunan')) {
+        timeframe = 'yearly';
+        startDate = `${now.getFullYear()}-01-01`;
+        endDate = today;
+      } else {
+        // Default to current month
+        timeframe = 'monthly';
+        startDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+        endDate = today;
+      }
+
+      this.logger.log(`DEBUG: Spending analysis - timeframe: ${timeframe}, startDate: ${startDate}, endDate: ${endDate}`);
+
+      // Get spending data
+      const totalSpending = await SupabaseService.getTotalTransactions(pengirim, startDate, endDate);
+      const transactionHistory = await SupabaseService.getTransactionHistory(pengirim, startDate, endDate, 10);
+      const categoryBreakdown = await SupabaseService.getTransactionSummaryByCategory(pengirim, startDate, endDate);
+
+      this.logger.log(`DEBUG: Total spending: ${totalSpending}, transactions: ${transactionHistory.length}`);
+
+      if (totalSpending === 0) {
+        return this.generateNoSpendingResponse(timeframe);
+      }
+
+      // Calculate spending analysis
+      const analysis = await this.calculateSpendingAnalysis(
+        totalSpending, 
+        transactionHistory, 
+        categoryBreakdown, 
+        timeframe,
+        pengirim
+      );
+
+      return analysis;
+
+    } catch (error) {
+      this.logger.error('Error in spending analysis:', error);
+      return 'Maaf, terjadi kesalahan saat menganalisis pola pengeluaran Anda. Silakan coba lagi.';
+    }
+  }
+
+  /**
+   * Calculate comprehensive spending analysis
+   */
+  private async calculateSpendingAnalysis(
+    totalSpending: number,
+    transactions: any[],
+    categoryBreakdown: Record<string, number>,
+    timeframe: 'daily' | 'weekly' | 'monthly' | 'yearly',
+    pengirim: string
+  ): Promise<string> {
+    
+    // Define spending thresholds (adjust based on your needs)
+    const thresholds = {
+      daily: { high: 100000, medium: 50000, low: 25000 },
+      weekly: { high: 500000, medium: 250000, low: 100000 },
+      monthly: { high: 2000000, medium: 1000000, low: 500000 },
+      yearly: { high: 20000000, medium: 10000000, low: 5000000 }
+    };
+
+    const threshold = thresholds[timeframe];
+    let spendingLevel: 'high' | 'medium' | 'low';
+    
+    if (totalSpending > threshold.high) {
+      spendingLevel = 'high';
+    } else if (totalSpending > threshold.medium) {
+      spendingLevel = 'medium';
+    } else {
+      spendingLevel = 'low';
+    }
+
+    // Get historical comparison for context
+    const historicalAverage = await this.getHistoricalAverage(pengirim, timeframe);
+    const isAboveAverage = totalSpending > historicalAverage;
+    const percentageDiff = historicalAverage > 0 ? 
+      Math.round(((totalSpending - historicalAverage) / historicalAverage) * 100) : 0;
+
+    // Generate response based on analysis
+    let response = `📊 Analisis Pengeluaran ${this.getTimeframeName(timeframe)}\n\n`;
+    
+    // Main spending assessment
+    response += `💰 Total: Rp ${totalSpending.toLocaleString('id-ID')}\n`;
+    response += `📈 Status: ${this.getSpendingStatusText(spendingLevel, isAboveAverage, percentageDiff)}\n\n`;
+
+    // Category breakdown
+    if (Object.keys(categoryBreakdown).length > 0) {
+      response += `📂 Breakdown Kategori:\n`;
+      const sortedCategories = Object.entries(categoryBreakdown)
+        .sort(([,a], [,b]) => b - a)
+        .slice(0, 5);
+      
+      sortedCategories.forEach(([category, amount]) => {
+        const percentage = Math.round((amount / totalSpending) * 100);
+        response += `• ${category}: Rp ${amount.toLocaleString('id-ID')} (${percentage}%)\n`;
+      });
+      response += '\n';
+    }
+
+    // Insights and recommendations
+    response += this.generateSpendingInsights(spendingLevel, isAboveAverage, categoryBreakdown, timeframe);
+    
+    return response;
+  }
+
+  /**
+   * Get historical average for comparison
+   */
+  private async getHistoricalAverage(pengirim: string, timeframe: 'daily' | 'weekly' | 'monthly' | 'yearly'): Promise<number> {
+    try {
+      const now = new Date();
+      let historicalStartDate: string;
+      let periods = 3; // Compare with last 3 periods
+
+      switch (timeframe) {
+        case 'daily':
+          // Compare with last 7 days average
+          const weekAgo = new Date(now);
+          weekAgo.setDate(now.getDate() - 7);
+          historicalStartDate = weekAgo.toISOString().split('T')[0];
+          periods = 7;
+          break;
+        case 'weekly':
+          // Compare with last 4 weeks
+          const monthAgo = new Date(now);
+          monthAgo.setDate(now.getDate() - 28);
+          historicalStartDate = monthAgo.toISOString().split('T')[0];
+          periods = 4;
+          break;
+        case 'monthly':
+          // Compare with last 3 months
+          const threeMonthsAgo = new Date(now);
+          threeMonthsAgo.setMonth(now.getMonth() - 3);
+          historicalStartDate = threeMonthsAgo.toISOString().split('T')[0];
+          periods = 3;
+          break;
+        case 'yearly':
+          // Compare with last 2 years
+          const twoYearsAgo = new Date(now);
+          twoYearsAgo.setFullYear(now.getFullYear() - 2);
+          historicalStartDate = twoYearsAgo.toISOString().split('T')[0];
+          periods = 2;
+          break;
+      }
+
+      const yesterday = new Date(now);
+      yesterday.setDate(now.getDate() - 1);
+      const endDate = yesterday.toISOString().split('T')[0];
+
+      const historicalTotal = await SupabaseService.getTotalTransactions(pengirim, historicalStartDate, endDate);
+      return Math.round(historicalTotal / periods);
+
+    } catch (error) {
+      this.logger.error('Error getting historical average:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * Generate spending insights and recommendations
+   */
+  private generateSpendingInsights(
+    spendingLevel: 'high' | 'medium' | 'low',
+    isAboveAverage: boolean,
+    categoryBreakdown: Record<string, number>,
+    timeframe: string
+  ): string {
+    let insights = `💡 Insights & Rekomendasi:\n\n`;
+
+    // Main assessment
+    if (spendingLevel === 'high') {
+      insights += `⚠️ Pengeluaran Tinggi: Anda termasuk dalam kategori pengeluaran tinggi untuk periode ini.\n\n`;
+      
+      if (isAboveAverage) {
+        insights += `📈 Pengeluaran Anda lebih tinggi dari rata-rata periode sebelumnya. Pertimbangkan untuk:\n`;
+        insights += `• Review pengeluaran tidak penting\n`;
+        insights += `• Buat budget ketat untuk periode selanjutnya\n`;
+        insights += `• Fokus pada kategori pengeluaran terbesar\n\n`;
+      }
+    } else if (spendingLevel === 'medium') {
+      insights += `⚖️ Pengeluaran Sedang: Pola pengeluaran Anda cukup wajar.\n\n`;
+      
+      if (isAboveAverage) {
+        insights += `📊 Ada sedikit peningkatan dari biasanya. Tetap waspada dan pantau terus.\n\n`;
+      } else {
+        insights += `✅ Pengeluaran Anda terkendali dengan baik.\n\n`;
+      }
+    } else {
+      insights += `✅ Pengeluaran Rendah: Selamat! Anda berhasil mengontrol pengeluaran dengan baik.\n\n`;
+      insights += `💡 Pertimbangkan untuk menabung atau investasi dari sisa budget Anda.\n\n`;
+    }
+
+    // Category-specific insights
+    const topCategory = Object.entries(categoryBreakdown)
+      .sort(([,a], [,b]) => b - a)[0];
+    
+    if (topCategory) {
+      const [category, amount] = topCategory;
+      const totalSpending = Object.values(categoryBreakdown).reduce((sum, val) => sum + val, 0);
+      const percentage = Math.round((amount / totalSpending) * 100);
+      
+      if (percentage > 40) {
+        insights += `🎯 Fokus Kategori: ${percentage}% pengeluaran Anda pada "${category}". `;
+        insights += this.getCategorySpecificAdvice(category) + '\n\n';
+      }
+    }
+
+    // General tips
+    insights += `📝 Tips:\n`;
+    insights += `• Catat semua pengeluaran untuk tracking yang lebih baik\n`;
+    insights += `• Set budget ${timeframe} dan pantau progress\n`;
+    insights += `• Review pengeluaran mingguan untuk evaluasi cepat`;
+
+    return insights;
+  }
+
+  /**
+   * Get category-specific spending advice
+   */
+  private getCategorySpecificAdvice(category: string): string {
+    const categoryLower = category.toLowerCase();
+    
+    if (categoryLower.includes('makan') || categoryLower.includes('food')) {
+      return `Pertimbangkan meal prep atau masak di rumah untuk menghemat.`;
+    } else if (categoryLower.includes('transport') || categoryLower.includes('bensin')) {
+      return `Coba gunakan transportasi publik atau carpooling.`;
+    } else if (categoryLower.includes('hiburan') || categoryLower.includes('entertainment')) {
+      return `Cari alternatif hiburan yang lebih ekonomis atau gratis.`;
+    } else if (categoryLower.includes('belanja') || categoryLower.includes('shopping')) {
+      return `Buat daftar belanja dan stick to budget yang sudah ditentukan.`;
+    } else if (categoryLower.includes('kesehatan') || categoryLower.includes('health')) {
+      return `Investasi kesehatan memang penting, tapi bisa dicari yang lebih cost-effective.`;
+    }
+    
+    return `Evaluasi apakah semua pengeluaran di kategori ini memang diperlukan.`;
+  }
+
+  /**
+   * Helper functions
+   */
+  private getTimeframeName(timeframe: string): string {
+    const names = {
+      'daily': 'Harian',
+      'weekly': 'Mingguan', 
+      'monthly': 'Bulanan',
+      'yearly': 'Tahunan'
+    };
+    return names[timeframe] || 'Periode Ini';
+  }
+
+  private getSpendingStatusText(spendingLevel: 'high' | 'medium' | 'low', isAboveAverage: boolean, percentageDiff: number): string {
+    const levelText = {
+      'high': '🔴 Tinggi',
+      'medium': '🟡 Sedang', 
+      'low': '🟢 Rendah'
+    };
+    
+    let statusText = levelText[spendingLevel];
+    
+    if (isAboveAverage && percentageDiff > 0) {
+      statusText += ` (↑${percentageDiff}% dari biasanya)`;
+    } else if (!isAboveAverage && percentageDiff < 0) {
+      statusText += ` (↓${Math.abs(percentageDiff)}% dari biasanya)`;
+    }
+    
+    return statusText;
+  }
+
+  private generateNoSpendingResponse(timeframe: 'daily' | 'weekly' | 'monthly' | 'yearly'): string {
+    const timeframeName = this.getTimeframeName(timeframe).toLowerCase();
+    return `📊 Analisis Pengeluaran ${this.getTimeframeName(timeframe)}\n\n` +
+           `💰 Tidak ada pengeluaran tercatat untuk periode ${timeframeName} ini.\n\n` +
+           `💡 Tips: Pastikan untuk mencatat semua transaksi agar analisis lebih akurat!`;
+  }
+
+  /**
+   * Check if prompt contains financial keywords (to avoid identity confusion)
+   */
+  private containsFinancialKeywords(prompt: string): boolean {
+    const financialKeywords = [
+      'boros', 'hemat', 'pengeluaran', 'keuangan', 'budget', 'spending', 
+      'uang', 'rupiah', 'transaksi', 'bayar', 'beli', 'jual', 'finansial',
+      'tabung', 'investasi', 'cicilan', 'kredit', 'debit', 'cash', 'transfer'
+    ];
+    
+    const normalizedPrompt = prompt.toLowerCase();
+    return financialKeywords.some(keyword => normalizedPrompt.includes(keyword));
   }
 }
