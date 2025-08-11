@@ -50,34 +50,38 @@ export class WhatsAppService implements OnModuleInit {
 
   async handleIncomingMessage(msg: any) {
     try {
-      // For all operations, send progress message after delay if processing takes time
+      // Get message text
       const messageText = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+      
+      // Check if message is directed to bot (contains @lumine)
+      const isBotMention = messageText.toLowerCase().includes('@lumine');
       
       let progressMessageId: string | null = null;
       let progressTimeout: NodeJS.Timeout | null = null;
       
-      // Set up delayed progress message for all operations
-      progressTimeout = setTimeout(async () => {
-        try {
-          this.logger.debug('Sending progress message...');
-          const progressText = "Lumine sedang menyiapkan jawabannya...";
-          const progressMessage = await this.sock.sendMessage(msg.key.remoteJid, {
-            text: progressText
-          }, { quoted: msg });
-          progressMessageId = progressMessage?.key?.id || null;
-          this.logger.debug(`Progress message sent with ID: ${progressMessageId}`);
-        } catch (error) {
-          this.logger.warn(`Failed to send progress message: ${error.message}`);
-        }
-      }, 1000); // Show progress after 1 second
-      
+      // Only set up progress message for bot mentions
+      if (isBotMention) {
+        progressTimeout = setTimeout(async () => {
+          try {
+            this.logger.debug('Sending progress message for bot mention...');
+            const progressText = "Lumine sedang menyiapkan jawabannya...";
+            const progressMessage = await this.sock.sendMessage(msg.key.remoteJid, {
+              text: progressText
+            }, { quoted: msg });
+            progressMessageId = progressMessage?.key?.id || null;
+            this.logger.debug(`Progress message sent with ID: ${progressMessageId}`);
+          } catch (error) {
+            this.logger.warn(`Failed to send progress message: ${error.message}`);
+          }
+        }, 200); // Show progress after 1 second
+      }
+
       // Process message
       const startTime = Date.now();
       const response = await this.messageProcessor.processMessage(msg);
       const processingTime = Date.now() - startTime;
       
-      // Clear progress timeout if processing finished quickly
-      
+      // Clear progress timeout if processing finished quickl
       
       let log = '';
       

@@ -6,6 +6,7 @@ import { AdvancedFinanceParserService } from './advanced-finance-parser.service'
 import { AdvancedFinanceResponseService } from './advanced-finance-response.service';
 import { BudgetManagementService } from './budget-management.service';
 import { FinancialInsightService } from './financial-insight.service';
+import { SavingsSimulationService } from './savings-simulation.service';
 
 @Module({
   providers: [
@@ -16,6 +17,7 @@ import { FinancialInsightService } from './financial-insight.service';
     AdvancedFinanceResponseService,
     BudgetManagementService,
     FinancialInsightService,
+    SavingsSimulationService,
   ],
   exports: [
     FinanceQAService,
@@ -25,6 +27,7 @@ import { FinancialInsightService } from './financial-insight.service';
     AdvancedFinanceResponseService,
     BudgetManagementService,
     FinancialInsightService,
+    SavingsSimulationService,
   ],
 })
 export class FinanceModule {}
