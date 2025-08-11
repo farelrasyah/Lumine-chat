@@ -37,9 +37,56 @@ export class MessageProcessorService {
 
     // Ambil nama pengirim WA jika ada (misal dari msg.notify atau msg.pushName)
     const pengirim = msg.notify || msg.pushName || msg.sender?.name || 'unknown';
+    const userNumber = msg.key?.remoteJid || msg.from || 'unknown';
     
     this.logger.log(`DEBUG: Pengirim detected: "${pengirim}"`);
     this.logger.log(`DEBUG: Message details - notify: "${msg.notify}", pushName: "${msg.pushName}", sender.name: "${msg.sender?.name}"`);
+    this.logger.log(`DEBUG: Full message structure:`, JSON.stringify(msg, null, 2));
+
+    // === DETEKSI REPLY OTOMATIS ===
+    const replyInfo = this.extractReplyInfo(msg);
+    if (replyInfo.isReply) {
+      this.logger.log(`DEBUG: Reply detected! Original message: "${replyInfo.quotedText?.substring(0, 50)}..."`);
+      
+      try {
+        // Handle sebagai reply context, bukan transaksi
+        const replyResponse = await this.handleContextualReply(prompt, userNumber, replyInfo);
+        if (replyResponse) {
+          // Simpan sebagai reply message dengan metadata
+          await SupabaseService.saveMessage(
+            userNumber, 
+            'user', 
+            prompt,
+            replyInfo.quotedMessageId,
+            undefined,
+            { 
+              is_contextual_reply: true,
+              quoted_text: replyInfo.quotedText?.substring(0, 100),
+              wamid: msg.key?.id || `reply_${Date.now()}`,
+              original_sender: replyInfo.originalSender
+            }
+          );
+
+          await SupabaseService.saveMessage(userNumber, 'assistant', replyResponse);
+          this.logger.log(`Reply Context Q: ${prompt}\nA: ${replyResponse}`);
+          return { reply: replyResponse, log: `Reply Context Q: ${prompt}\nA: ${replyResponse}` };
+        } else {
+          // If contextual reply fails, still prevent transaction parsing
+          this.logger.log(`DEBUG: Contextual reply failed, providing simple reply response`);
+          const simpleReply = this.generateSimpleReplyResponse(replyInfo.quotedText, prompt);
+          await SupabaseService.saveMessage(userNumber, 'user', prompt);
+          await SupabaseService.saveMessage(userNumber, 'assistant', simpleReply);
+          return { reply: simpleReply, log: `Simple Reply: ${prompt}\nA: ${simpleReply}` };
+        }
+      } catch (error) {
+        this.logger.error('Error handling contextual reply:', error);
+        // Still provide a contextual response even if there's an error
+        const errorReply = this.generateSimpleReplyResponse(replyInfo.quotedText, prompt);
+        await SupabaseService.saveMessage(userNumber, 'user', prompt);
+        await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
+        return { reply: errorReply, log: `Error Reply: ${prompt}\nA: ${errorReply}` };
+      }
+    }
 
     // --- Integrasi parser, Supabase & Google Sheets ---
     const parsed = await this.parserService.parseMessage(prompt, pengirim);
@@ -87,7 +134,7 @@ export class MessageProcessorService {
     // --- Jika bukan transaksi, lanjutkan ke AI ---
 
     // Ambil nomor user (misal dari msg.key.remoteJid, sesuaikan dengan struktur msg Anda)
-    const userNumber = msg.key?.remoteJid || msg.from || 'unknown';
+    // const userNumber = msg.key?.remoteJid || msg.from || 'unknown'; // Hapus karena sudah dideklarasi di atas
     try {
       // Simpan pesan user ke Supabase
       await SupabaseService.saveMessage(userNumber, 'user', prompt);
@@ -110,6 +157,24 @@ export class MessageProcessorService {
       }
 
       // === FITUR TANYA JAWAB KEUANGAN LANJUTAN ===
+      
+      // === FITUR TESTING REPLY ===
+      if (this.isReplyTestCommand(prompt)) {
+        try {
+          const replyTestResponse = await this.handleReplyTestCommand(prompt, userNumber);
+          if (replyTestResponse) {
+            await SupabaseService.saveMessage(userNumber, 'assistant', replyTestResponse);
+            this.history.push({ prompt, response: replyTestResponse });
+            this.logger.log(`Reply Test Q: ${prompt}\nA: ${replyTestResponse}`);
+            return { reply: replyTestResponse, log: `Reply Test Q: ${prompt}\nA: ${replyTestResponse}` };
+          }
+        } catch (error) {
+          this.logger.error('Error processing reply test command:', error);
+          const errorReply = 'Maaf, terjadi kesalahan saat testing fitur reply.';
+          await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
+          return { reply: errorReply, log: `Reply Test Error: ${error}` };
+        }
+      }
       
       // Check for budget-related commands first
       if (this.isBudgetCommand(prompt)) {
@@ -419,5 +484,443 @@ export class MessageProcessorService {
     };
 
     return emojiMap[type] || '💡';
+  }
+
+  /**
+   * Check if the prompt is a reply test command
+   */
+  private isReplyTestCommand(prompt: string): boolean {
+    const replyTestKeywords = [
+      'test reply', 'testing reply', 'tes reply', 'reply test',
+      'reply ke pesan', 'balas pesan', 'reply pesan lama',
+      'lihat pesan lama', 'pesan terbaru', 'cari pesan',
+      'thread test', 'conversation test'
+    ];
+
+    const normalizedPrompt = prompt.toLowerCase();
+    return replyTestKeywords.some(keyword => normalizedPrompt.includes(keyword));
+  }
+
+  /**
+   * Handle reply test commands
+   */
+  private async handleReplyTestCommand(prompt: string, userNumber: string): Promise<string | null> {
+    const normalizedPrompt = prompt.toLowerCase();
+
+    // Test 1: Lihat pesan terbaru dengan ID
+    if (normalizedPrompt.includes('pesan terbaru') || normalizedPrompt.includes('lihat pesan')) {
+      const recentMessages = await SupabaseService.getRecentMessagesWithIds(userNumber, 10);
+      
+      if (recentMessages.length === 0) {
+        return `📋 **Pesan Terbaru:**\n\nBelum ada pesan tersimpan untuk testing reply.`;
+      }
+
+      let response = `📋 **10 Pesan Terbaru (untuk testing reply):**\n\n`;
+      
+      recentMessages.forEach((msg, index) => {
+        const shortContent = msg.content.length > 50 ? 
+          msg.content.substring(0, 50) + '...' : msg.content;
+        const timeAgo = this.getTimeAgo(msg.created_at);
+        const roleEmoji = msg.role === 'user' ? '👤' : '🤖';
+        
+        response += `${index}. ${roleEmoji} ${shortContent}\n`;
+        response += `   📝 ID: ${msg.id.substring(0, 8)}... | ⏰ ${timeAgo}\n\n`;
+      });
+
+      response += `💡 **Cara testing:**\n`;
+      response += `• "reply ke pesan 2 [pesan Anda]" - Reply ke pesan index 2\n`;
+      response += `• "cari pesan budget" - Cari pesan berisi kata budget\n`;
+      response += `• "test thread baru" - Buat conversation baru`;
+
+      return response;
+    }
+
+    // Test 2: Reply berdasarkan index
+    if (normalizedPrompt.includes('reply ke pesan')) {
+      const indexMatch = normalizedPrompt.match(/reply ke pesan (\d+)\s+(.+)/);
+      if (indexMatch) {
+        const messageIndex = parseInt(indexMatch[1]);
+        const replyContent = indexMatch[2];
+
+        try {
+          await SupabaseService.replyToMessageByIndex(
+            userNumber,
+            messageIndex,
+            replyContent,
+            'user',
+            { test_reply: true, wamid: `test_${Date.now()}` }
+          );
+
+          // Get the replied message for confirmation
+          const recentMessages = await SupabaseService.getRecentMessagesWithIds(userNumber, messageIndex + 1);
+          const repliedMsg = recentMessages[messageIndex];
+          
+          return `✅ **Reply Berhasil!**\n\n` +
+                 `📤 Reply Anda: "${replyContent}"\n` +
+                 `📥 Ke pesan: "${repliedMsg.content.substring(0, 50)}..."\n\n` +
+                 `🔗 Reply tersimpan dengan relasi ke pesan asli!`;
+
+        } catch (error) {
+          return `❌ **Reply Gagal:**\n\n${error.message}`;
+        }
+      }
+    }
+
+    // Test 3: Cari dan reply pesan berdasarkan keyword
+    if (normalizedPrompt.includes('cari pesan')) {
+      const searchMatch = normalizedPrompt.match(/cari pesan (.+)/);
+      if (searchMatch) {
+        const keyword = searchMatch[1];
+
+        try {
+          const foundMessages = await SupabaseService.findOldMessageByContent(userNumber, keyword, 7);
+          
+          if (foundMessages.length === 0) {
+            return `🔍 **Hasil Pencarian:**\n\nTidak ada pesan yang mengandung "${keyword}" dalam 7 hari terakhir.`;
+          }
+
+          let response = `🔍 **Hasil Pencarian untuk "${keyword}":**\n\n`;
+          
+          foundMessages.forEach((msg, index) => {
+            const shortContent = msg.content.length > 60 ? 
+              msg.content.substring(0, 60) + '...' : msg.content;
+            const timeAgo = this.getTimeAgo(msg.created_at);
+            const roleEmoji = msg.role === 'user' ? '👤' : '🤖';
+            
+            response += `${index + 1}. ${roleEmoji} ${shortContent}\n`;
+            response += `   📝 ID: ${msg.id.substring(0, 8)}... | ⏰ ${timeAgo}\n\n`;
+          });
+
+          response += `💡 **Untuk reply:** Ketik "reply search ${keyword} [pesan reply Anda]"`;
+          
+          return response;
+
+        } catch (error) {
+          return `❌ **Pencarian Gagal:**\n\n${error.message}`;
+        }
+      }
+    }
+
+    // Test 4: Reply hasil pencarian
+    if (normalizedPrompt.includes('reply search')) {
+      const replySearchMatch = normalizedPrompt.match(/reply search (.+?) (.+)/);
+      if (replySearchMatch) {
+        const keyword = replySearchMatch[1];
+        const replyContent = replySearchMatch[2];
+
+        try {
+          await SupabaseService.searchAndReplyToMessage(
+            userNumber,
+            keyword,
+            replyContent,
+            'user',
+            { test_search_reply: true, search_keyword: keyword }
+          );
+
+          return `✅ **Search Reply Berhasil!**\n\n` +
+                 `🔍 Keyword: "${keyword}"\n` +
+                 `📤 Reply: "${replyContent}"\n\n` +
+                 `🔗 Reply tersimpan dengan relasi ke pesan yang ditemukan!`;
+
+        } catch (error) {
+          return `❌ **Search Reply Gagal:**\n\n${error.message}`;
+        }
+      }
+    }
+
+    // Test 5: Buat thread baru
+    if (normalizedPrompt.includes('test thread') || normalizedPrompt.includes('thread baru')) {
+      try {
+        const conversationId = await SupabaseService.createConversationThread(
+          userNumber,
+          'Thread testing untuk fitur conversation',
+          { topic: 'testing', created_via: 'whatsapp_command' }
+        );
+
+        return `🧵 **Thread Baru Dibuat!**\n\n` +
+               `📝 Conversation ID: ${conversationId.substring(0, 8)}...\n` +
+               `💬 Pesan awal: "Thread testing untuk fitur conversation"\n\n` +
+               `💡 **Testing lanjutan:**\n` +
+               `• Semua pesan selanjutnya bisa dikaitkan ke thread ini\n` +
+               `• Ketik "lihat thread" untuk melihat semua thread Anda`;
+
+      } catch (error) {
+        return `❌ **Thread Gagal Dibuat:**\n\n${error.message}`;
+      }
+    }
+
+    // Test 6: Lihat semua thread
+    if (normalizedPrompt.includes('lihat thread') || normalizedPrompt.includes('thread saya')) {
+      try {
+        const threads = await SupabaseService.getThreadSummary(userNumber);
+        const threadIds = Object.keys(threads);
+
+        if (threadIds.length === 0) {
+          return `🧵 **Thread Conversations:**\n\nBelum ada thread conversation. Ketik "test thread baru" untuk membuat thread pertama!`;
+        }
+
+        let response = `🧵 **Thread Conversations (${threadIds.length}):**\n\n`;
+
+        threadIds.slice(0, 5).forEach((threadId, index) => {
+          const messages = threads[threadId];
+          const messageCount = messages.length;
+          const latestMessage = messages[0]; // sudah diurutkan desc
+          const shortId = threadId.substring(0, 8);
+          const timeAgo = this.getTimeAgo(latestMessage.created_at);
+
+          response += `${index + 1}. 🧵 Thread ${shortId}...\n`;
+          response += `   💬 ${messageCount} pesan | ⏰ ${timeAgo}\n`;
+          response += `   📝 "${latestMessage.content.substring(0, 40)}..."\n\n`;
+        });
+
+        return response;
+
+      } catch (error) {
+        return `❌ **Thread Load Gagal:**\n\n${error.message}`;
+      }
+    }
+
+    // Default help
+    return `🧪 **Testing Reply Features:**\n\n` +
+           `📋 **Perintah yang tersedia:**\n` +
+           `• "lihat pesan terbaru" - Lihat 10 pesan terbaru\n` +
+           `• "reply ke pesan [index] [pesan]" - Reply ke pesan\n` +
+           `• "cari pesan [keyword]" - Cari pesan lama\n` +
+           `• "reply search [keyword] [pesan]" - Reply hasil cari\n` +
+           `• "test thread baru" - Buat conversation thread\n` +
+           `• "lihat thread" - Lihat semua thread\n\n` +
+           `💡 **Contoh:**\n` +
+           `"reply ke pesan 2 Terima kasih!" - Reply ke pesan index 2\n` +
+           `"cari pesan budget" - Cari pesan berisi "budget"`;
+  }
+
+  /**
+   * Helper function to calculate time ago
+   */
+  private getTimeAgo(timestamp: string): string {
+    const now = new Date();
+    const messageTime = new Date(timestamp);
+    const diffMs = now.getTime() - messageTime.getTime();
+    const diffMinutes = Math.floor(diffMs / (1000 * 60));
+    
+    if (diffMinutes < 1) return 'baru saja';
+    if (diffMinutes < 60) return `${diffMinutes} menit lalu`;
+    
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours < 24) return `${diffHours} jam lalu`;
+    
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 7) return `${diffDays} hari lalu`;
+    
+    return `${Math.floor(diffDays / 7)} minggu lalu`;
+  }
+
+  /**
+   * Extract reply information from WhatsApp message structure
+   */
+  private extractReplyInfo(msg: any): {
+    isReply: boolean;
+    quotedMessageId?: string;
+    quotedText?: string;
+    originalSender?: string;
+  } {
+    // Debug: Log full message structure to understand reply format
+    this.logger.log('DEBUG extractReplyInfo - Full msg structure:', JSON.stringify(msg, null, 2));
+
+    // Check different possible reply structures in WhatsApp messages
+    const quotedMessage = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage ||
+                         msg.message?.conversation?.contextInfo?.quotedMessage ||
+                         msg.contextInfo?.quotedMessage ||
+                         msg.quoted;
+
+    const contextInfo = msg.message?.extendedTextMessage?.contextInfo ||
+                       msg.message?.conversation?.contextInfo ||
+                       msg.contextInfo;
+
+    if (quotedMessage || contextInfo?.participant || contextInfo?.stanzaId) {
+      this.logger.log('DEBUG: Reply detected with contextInfo:', JSON.stringify(contextInfo, null, 2));
+      
+      return {
+        isReply: true,
+        quotedMessageId: contextInfo?.stanzaId || contextInfo?.id,
+        quotedText: this.extractQuotedText(quotedMessage),
+        originalSender: contextInfo?.participant || contextInfo?.remoteJid
+      };
+    }
+
+    // Check if message has reply indicators in text
+    const text = this.extractText(msg);
+    if (text && this.hasReplyIndicators(text)) {
+      return {
+        isReply: true,
+        quotedText: 'Reply detected by text pattern'
+      };
+    }
+
+    return { isReply: false };
+  }
+
+  /**
+   * Extract text from quoted message
+   */
+  private extractQuotedText(quotedMessage: any): string | undefined {
+    if (!quotedMessage) return undefined;
+
+    return quotedMessage.conversation ||
+           quotedMessage.extendedTextMessage?.text ||
+           quotedMessage.text ||
+           'Quoted message';
+  }
+
+  /**
+   * Check if text has reply indicators
+   */
+  private hasReplyIndicators(text: string): boolean {
+    const replyPatterns = [
+      /^(re:|reply:|balasan:|jawaban:)/i,
+      /membalas|menanggapi|menjawab/i,
+      /tentang (pesan|chat|pertanyaan) (sebelum|tadi|kemarin)/i
+    ];
+
+    return replyPatterns.some(pattern => pattern.test(text));
+  }
+
+  /**
+   * Handle contextual reply based on quoted message
+   */
+  private async handleContextualReply(prompt: string, userNumber: string, replyInfo: any): Promise<string | null> {
+    try {
+      // If we have quoted text, use it as context
+      if (replyInfo.quotedText) {
+        this.logger.log(`DEBUG: Handling contextual reply to: "${replyInfo.quotedText}"`);
+        
+        // Create contextual response first (don't worry about database relationship if it fails)
+        const contextPrompt = `User is replying to this message: "${replyInfo.quotedText}"\nUser's reply: "${prompt}"\n\nPlease provide a contextual response that acknowledges the original message and responds appropriately to the reply.`;
+        
+        // Get AI response with context
+        const contextualResponse = await this.queryAIWithContext([
+          { role: 'assistant', content: replyInfo.quotedText },
+          { role: 'user', content: prompt }
+        ]);
+
+        const cleanResponse = this.stripMarkdown(contextualResponse);
+        
+        // Try to save to database, but don't fail if there's an issue
+        try {
+          // Try to find the original message in our database
+          let originalMessage: { id: string; created_at: string } | null = null;
+          if (replyInfo.quotedText !== 'Quoted message' && replyInfo.quotedText !== 'Reply detected by text pattern') {
+            const foundMessages = await SupabaseService.findOldMessageByContent(
+              userNumber, 
+              replyInfo.quotedText.substring(0, 20), // First 20 chars
+              7 // Search in last 7 days
+            );
+            originalMessage = foundMessages.length > 0 ? foundMessages[0] as { id: string; created_at: string } : null;
+          }
+
+          // Save the reply relationship if we found the original message
+          if (originalMessage) {
+            this.logger.log(`DEBUG: Found original message in database, creating reply relationship`);
+            await SupabaseService.saveReplyMessage(
+              userNumber,
+              'user',
+              prompt,
+              originalMessage.id, // Use database UUID, not WhatsApp stanzaId
+              undefined,
+              {
+                contextual_reply: true,
+                reply_delay_minutes: this.calculateMinutesSince(originalMessage.created_at),
+                whatsapp_stanza_id: replyInfo.quotedMessageId // Store WhatsApp ID separately
+              }
+            );
+          } else {
+            // Save as regular message with reply metadata if can't find original
+            await SupabaseService.saveMessage(
+              userNumber, 
+              'user', 
+              prompt,
+              undefined, // No reply_to_id since we can't find the original
+              undefined,
+              { 
+                is_contextual_reply: true,
+                quoted_text: replyInfo.quotedText?.substring(0, 100),
+                whatsapp_stanza_id: replyInfo.quotedMessageId,
+                original_sender: replyInfo.originalSender,
+                reply_attempt_failed: 'original_message_not_found'
+              }
+            );
+            this.logger.log(`DEBUG: Could not find original message in database, saved as contextual message`);
+          }
+        } catch (dbError) {
+          this.logger.error('Error saving reply to database (continuing with response):', dbError);
+          // Continue with response even if database fails
+        }
+
+        return `💬 **Re:** ${replyInfo.quotedText.substring(0, 30)}...\n\n${cleanResponse}`;
+      }
+
+      // Fallback for reply patterns in text
+      if (this.hasReplyIndicators(prompt)) {
+        const response = await this.queryAIWithContext([
+          { role: 'user', content: `This is a reply/follow-up message: ${prompt}. Please respond contextually.` }
+        ]);
+        return this.stripMarkdown(response);
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.error('Error in handleContextualReply:', error);
+      
+      // Even if there's an error, try to give a contextual response
+      if (replyInfo.quotedText) {
+        return `💬 Saya melihat Anda merespons tentang tips keuangan. ${replyInfo.quotedText.includes('Tips') ? 'Senang mendengar Anda akan mencoba tips tersebut!' : 'Terima kasih atas responnya!'} Ada yang ingin ditanyakan lebih lanjut?`;
+      }
+      
+      return `Maaf, saya mendeteksi ini adalah balasan pesan, tapi terjadi kesalahan saat memproses konteksnya. Bisa dijelaskan lagi?`;
+    }
+  }
+
+  /**
+   * Calculate minutes since timestamp
+   */
+  private calculateMinutesSince(timestamp: string): number {
+    const messageTime = new Date(timestamp);
+    const now = new Date();
+    return Math.floor((now.getTime() - messageTime.getTime()) / (1000 * 60));
+  }
+
+  /**
+   * Generate simple contextual reply when full AI processing fails
+   */
+  private generateSimpleReplyResponse(quotedText: string | undefined, userReply: string): string {
+    if (!quotedText) {
+      return `Terima kasih atas responnya! Ada yang bisa saya bantu lagi?`;
+    }
+
+    // Simple context-based responses
+    if (quotedText.includes('Tips') || quotedText.includes('tips')) {
+      if (userReply.toLowerCase().includes('terima kasih') || userReply.toLowerCase().includes('thanks')) {
+        return `💡 Sama-sama! Senang bisa membantu dengan tips keuangannya. Semoga berhasil diterapkan! Ada yang ingin ditanyakan lagi?`;
+      }
+      if (userReply.toLowerCase().includes('coba') || userReply.toLowerCase().includes('akan')) {
+        return `💡 Bagus! Semoga tips keuangan tersebut membantu menghemat pengeluaran Anda. Jangan ragu untuk bertanya jika butuh tips lainnya!`;
+      }
+      return `💡 Mengenai tips keuangan tersebut, ada yang ingin ditanyakan lebih detail?`;
+    }
+
+    if (quotedText.includes('budget') || quotedText.includes('Budget')) {
+      return `💰 Tentang budget tersebut, apakah ada yang ingin dibahas lebih lanjut? Saya bisa membantu analisis atau memberikan saran.`;
+    }
+
+    if (quotedText.includes('pengeluaran') || quotedText.includes('Pengeluaran')) {
+      return `📊 Mengenai analisis pengeluaran tersebut, ada kategori tertentu yang ingin dibahas lebih detail?`;
+    }
+
+    if (quotedText.includes('transaksi') || quotedText.includes('Transaksi')) {
+      return `📝 Tentang pencatatan transaksi tersebut, apakah sudah sesuai atau perlu penyesuaian?`;
+    }
+
+    // Generic contextual response
+    return `💬 Mengenai hal tersebut, ada yang bisa saya bantu lebih lanjut? Saya siap membantu dengan pertanyaan keuangan Anda.`;
   }
 }

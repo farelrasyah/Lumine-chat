@@ -63,10 +63,24 @@ export class SupabaseService {
     console.log('DEBUG saveTransaction - Verification read result:', verification);
   }
 
-  static async saveMessage(userNumber: string, role: 'user' | 'assistant', content: string) {
+  static async saveMessage(
+    userNumber: string, 
+    role: 'user' | 'assistant', 
+    content: string, 
+    replyToId?: string, 
+    conversationId?: string, 
+    metadata?: any
+  ) {
     const client = this.getClient();
     const { error } = await client.from('chat_messages').insert([
-      { user_number: userNumber, role, content }
+      { 
+        user_number: userNumber, 
+        role, 
+        content,
+        reply_to_id: replyToId || null,
+        conversation_id: conversationId || null,
+        metadata: metadata || null
+      }
     ]);
     if (error) throw error;
   }
@@ -75,12 +89,241 @@ export class SupabaseService {
     const client = this.getClient();
     const { data, error } = await client
       .from('chat_messages')
-      .select('role, content')
+      .select('id, role, content, reply_to_id, conversation_id, metadata, created_at')
       .eq('user_number', userNumber)
       .order('created_at', { ascending: true })
       .limit(limit);
     if (error) throw error;
     return data || [];
+  }
+
+  // === FITUR REPLY DAN THREADING ===
+  
+  static async saveReplyMessage(
+    userNumber: string,
+    role: 'user' | 'assistant',
+    content: string,
+    replyToId: string,
+    conversationId?: string,
+    metadata?: any
+  ) {
+    return this.saveMessage(userNumber, role, content, replyToId, conversationId, metadata);
+  }
+
+  static async getMessageWithReplies(messageId: string) {
+    const client = this.getClient();
+    
+    // Get the original message
+    const { data: originalMessage, error: originalError } = await client
+      .from('chat_messages')
+      .select('*')
+      .eq('id', messageId)
+      .single();
+    
+    if (originalError) throw originalError;
+    
+    // Get all replies to this message
+    const { data: replies, error: repliesError } = await client
+      .from('chat_messages')
+      .select('*')
+      .eq('reply_to_id', messageId)
+      .order('created_at', { ascending: true });
+    
+    if (repliesError) throw repliesError;
+    
+    return {
+      original: originalMessage,
+      replies: replies || []
+    };
+  }
+
+  static async getConversationMessages(conversationId: string, limit = 50) {
+    const client = this.getClient();
+    const { data, error } = await client
+      .from('chat_messages')
+      .select('*')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true })
+      .limit(limit);
+    
+    if (error) throw error;
+    return data || [];
+  }
+
+  static async createConversationThread(
+    userNumber: string,
+    initialMessage: string,
+    metadata?: any
+  ) {
+    const client = this.getClient();
+    
+    // Generate a new conversation ID (you can use crypto.randomUUID() if available)
+    const conversationId = crypto.randomUUID();
+    
+    // Save the initial message with conversation_id
+    await this.saveMessage(
+      userNumber,
+      'user',
+      initialMessage,
+      undefined,
+      conversationId,
+      { ...metadata, thread_starter: true }
+    );
+    
+    return conversationId;
+  }
+
+  static async updateMessageMetadata(messageId: string, metadata: any) {
+    const client = this.getClient();
+    const { error } = await client
+      .from('chat_messages')
+      .update({ metadata })
+      .eq('id', messageId);
+    
+    if (error) throw error;
+  }
+
+  static async getMessagesByMetadata(userNumber: string, metadataQuery: any) {
+    const client = this.getClient();
+    const { data, error } = await client
+      .from('chat_messages')
+      .select('*')
+      .eq('user_number', userNumber)
+      .contains('metadata', metadataQuery)
+      .order('created_at', { ascending: false });
+    
+    if (error) throw error;
+    return data || [];
+  }
+
+  static async getThreadSummary(userNumber: string) {
+    const client = this.getClient();
+    
+    // Get all messages with conversation_id for this user
+    const { data, error } = await client
+      .from('chat_messages')
+      .select('conversation_id, content, created_at, metadata')
+      .eq('user_number', userNumber)
+      .not('conversation_id', 'is', null)
+      .order('created_at', { ascending: false });
+    
+    if (error) throw error;
+    
+    // Group by conversation_id
+    const threads: Record<string, any[]> = {};
+    data?.forEach(message => {
+      const convId = message.conversation_id;
+      if (!threads[convId]) {
+        threads[convId] = [];
+      }
+      threads[convId].push(message);
+    });
+    
+    return threads;
+  }
+
+  // === HELPER FUNCTIONS UNTUK REPLY PESAN LAMA ===
+
+  static async findOldMessageByContent(userNumber: string, searchContent: string, daysBack = 7) {
+    const client = this.getClient();
+    
+    // Cari pesan berdasarkan konten dalam X hari terakhir
+    const dateLimit = new Date();
+    dateLimit.setDate(dateLimit.getDate() - daysBack);
+    
+    const { data, error } = await client
+      .from('chat_messages')
+      .select('*')
+      .eq('user_number', userNumber)
+      .ilike('content', `%${searchContent}%`)
+      .gte('created_at', dateLimit.toISOString())
+      .order('created_at', { ascending: false })
+      .limit(5);
+    
+    if (error) throw error;
+    return data || [];
+  }
+
+  static async getRecentMessagesWithIds(userNumber: string, limit = 10) {
+    const client = this.getClient();
+    
+    const { data, error } = await client
+      .from('chat_messages')
+      .select('id, content, created_at, role, metadata')
+      .eq('user_number', userNumber)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    
+    if (error) throw error;
+    return data || [];
+  }
+
+  static async replyToMessageByIndex(
+    userNumber: string,
+    messageIndex: number,
+    replyContent: string,
+    role: 'user' | 'assistant' = 'user',
+    metadata?: any
+  ) {
+    // Ambil pesan terbaru
+    const recentMessages = await this.getRecentMessagesWithIds(userNumber, messageIndex + 1);
+    
+    if (recentMessages.length <= messageIndex) {
+      throw new Error(`Message index ${messageIndex} not found. Only ${recentMessages.length} recent messages available.`);
+    }
+    
+    const targetMessage = recentMessages[messageIndex];
+    
+    return await this.saveReplyMessage(
+      userNumber,
+      role,
+      replyContent,
+      targetMessage.id,
+      undefined,
+      {
+        ...metadata,
+        replied_to_content: targetMessage.content.substring(0, 50) + '...', // Preview pesan yang di-reply
+        reply_delay_minutes: this.calculateMinutesSince(targetMessage.created_at)
+      }
+    );
+  }
+
+  static async searchAndReplyToMessage(
+    userNumber: string,
+    searchKeyword: string,
+    replyContent: string,
+    role: 'user' | 'assistant' = 'user',
+    metadata?: any
+  ) {
+    // Cari pesan lama berdasarkan keyword
+    const foundMessages = await this.findOldMessageByContent(userNumber, searchKeyword);
+    
+    if (foundMessages.length === 0) {
+      throw new Error(`No messages found containing "${searchKeyword}"`);
+    }
+    
+    // Reply ke pesan pertama yang ditemukan
+    const targetMessage = foundMessages[0];
+    
+    return await this.saveReplyMessage(
+      userNumber,
+      role,
+      replyContent,
+      targetMessage.id,
+      undefined,
+      {
+        ...metadata,
+        search_keyword: searchKeyword,
+        replied_to_content: targetMessage.content.substring(0, 50) + '...',
+        reply_delay_minutes: this.calculateMinutesSince(targetMessage.created_at)
+      }
+    );
+  }
+
+  private static calculateMinutesSince(timestamp: string): number {
+    const messageTime = new Date(timestamp);
+    const now = new Date();
+    return Math.floor((now.getTime() - messageTime.getTime()) / (1000 * 60));
   }
 
   // === FITUR QUERY KEUANGAN ===
