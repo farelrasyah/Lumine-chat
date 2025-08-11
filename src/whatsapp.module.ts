@@ -7,10 +7,11 @@ import { SheetModule } from './sheet/sheet.module';
 import { FinanceModule } from './finance/finance.module';
 import { ReportsService } from './reports/reports.service';
 import { ChartsService } from './charts/charts.service';
+import { PdfGeneratorService } from './pdf/pdf-generator.service';
 
 @Module({
   imports: [ParserModule, SheetModule, FinanceModule],
-  providers: [WhatsAppService, MessageProcessorService, ReportsService, ChartsService],
+  providers: [WhatsAppService, MessageProcessorService, ReportsService, ChartsService, PdfGeneratorService],
   exports: [WhatsAppService],
 })
 export class WhatsAppModule {}

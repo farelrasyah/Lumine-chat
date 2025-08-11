@@ -91,11 +91,22 @@ export class WhatsAppService implements OnModuleInit {
         
         // If response includes an image (for chart commands)
         if (response.image && response.imageCaption) {
-          // Send image with caption
-          await this.sock.sendMessage(msg.key.remoteJid, {
-            image: response.image,
-            caption: response.imageCaption
-          }, { quoted: msg });
+          // Check if this is a PDF (for PDF reports)
+          if (response.log && response.log.includes('PDF Report')) {
+            // Send as document for PDF
+            await this.sock.sendMessage(msg.key.remoteJid, {
+              document: response.image,
+              fileName: `Laporan_Keuangan_${new Date().toISOString().split('T')[0]}.pdf`,
+              mimetype: 'application/pdf',
+              caption: response.imageCaption
+            }, { quoted: msg });
+          } else {
+            // Send as image for charts
+            await this.sock.sendMessage(msg.key.remoteJid, {
+              image: response.image,
+              caption: response.imageCaption
+            }, { quoted: msg });
+          }
           
           this.logger.log(log);
         } 

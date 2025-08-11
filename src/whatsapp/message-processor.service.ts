@@ -15,6 +15,7 @@ import { FinancialInsightService } from '../finance/financial-insight.service';
 import { SavingsSimulationService } from '../finance/savings-simulation.service';
 import { ReportsService } from '../reports/reports.service';
 import { ChartsService } from '../charts/charts.service';
+import { PdfGeneratorService } from '../pdf/pdf-generator.service';
 
 @Injectable()
 export class MessageProcessorService {
@@ -30,6 +31,7 @@ export class MessageProcessorService {
     private readonly savingsService: SavingsSimulationService,
     private readonly reportsService: ReportsService,
     private readonly chartsService: ChartsService,
+    private readonly pdfService: PdfGeneratorService,
   ) {}
 
   async processMessage(msg: any): Promise<{ reply?: string | null; log: string; image?: Buffer; imageCaption?: string }> {
@@ -139,6 +141,22 @@ export class MessageProcessorService {
         const errorReply = 'Maaf, terjadi kesalahan saat membuat simulasi tabungan.';
         await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
         return { reply: errorReply, log: `Savings Simulation Error: ${error}` };
+      }
+    }
+
+    // Check for PDF report commands
+    if (this.isPdfReportCommand(prompt)) {
+      try {
+        this.logger.log('DEBUG: PDF report command detected');
+        const pdfResult = await this.handlePdfReportCommand(prompt, pengirim, msg);
+        if (pdfResult) {
+          return pdfResult;
+        }
+      } catch (error) {
+        this.logger.error('Error processing PDF report:', error);
+        const errorReply = 'Maaf, terjadi kesalahan saat membuat laporan PDF.';
+        await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
+        return { reply: errorReply, log: `PDF Report Error: ${error}` };
       }
     }
 
@@ -1945,6 +1963,112 @@ export class MessageProcessorService {
       minimumFractionDigits: 0,
       maximumFractionDigits: 0
     }).format(amount);
+  }
+
+  /**
+   * Check if message is a PDF report command
+   */
+  private isPdfReportCommand(prompt: string): boolean {
+    const pdfPatterns = [
+      /laporan.*pdf/i,
+      /pdf.*laporan/i,
+      /download.*laporan/i,
+      /unduh.*laporan/i,
+      /laporan.*keuangan.*pdf/i,
+      /pdf.*keuangan/i,
+      /export.*pdf/i,
+      /buat.*laporan.*pdf/i,
+      /generate.*laporan/i,
+      /laporan.*pengeluaran.*pdf/i,
+      /cetak.*laporan/i,
+      /print.*laporan/i,
+      /save.*laporan/i,
+      /laporan.*finansial.*pdf/i
+    ];
+
+    return pdfPatterns.some(pattern => pattern.test(prompt));
+  }
+
+  /**
+   * Handle PDF report command
+   */
+  private async handlePdfReportCommand(prompt: string, pengirim: string, msg: any): Promise<{ reply?: string; log: string; image?: Buffer; imageCaption?: string } | null> {
+    const userNumber = msg.key?.remoteJid || msg.from || 'unknown';
+    
+    try {
+      // Extract period from prompt
+      let period: 'today' | 'week' | 'month' = 'month';
+      if (/hari.*ini|today|harian/i.test(prompt)) {
+        period = 'today';
+      } else if (/minggu|week|mingguan|7.*hari/i.test(prompt)) {
+        period = 'week';
+      } else if (/bulan|month|bulanan|30.*hari/i.test(prompt)) {
+        period = 'month';
+      }
+
+      this.logger.log(`Generating PDF report for period: ${period}`);
+
+      // Get financial report data
+      const reportData = await this.pdfService.getFinancialReportData(pengirim, period);
+      
+      // Generate PDF
+      const pdfBuffer = await this.pdfService.generateFinancialReportPdf(reportData);
+
+      let periodText = '';
+      switch (period) {
+        case 'today':
+          periodText = 'hari ini';
+          break;
+        case 'week':
+          periodText = '7 hari terakhir';
+          break;
+        case 'month':
+          periodText = 'bulan ini';
+          break;
+      }
+
+      const caption = `📋 **LAPORAN KEUANGAN PDF**\n\n` +
+        `📅 **Periode**: ${reportData.period}\n` +
+        `💰 **Total Pengeluaran**: ${this.formatRupiah(reportData.totalExpense)}\n` +
+        `🧾 **Jumlah Transaksi**: ${reportData.transactions.length}\n` +
+        `📊 **Kategori**: ${reportData.categoryBreakdown.length}\n\n` +
+        `📎 File PDF berisi:\n` +
+        `• Ringkasan pengeluaran\n` +
+        `• Breakdown per kategori\n` +
+        `• Detail transaksi\n` +
+        `• Grafik visual\n\n` +
+        `💼 Siap untuk arsip atau presentasi!`;
+
+      // Save messages
+      await SupabaseService.saveMessage(userNumber, 'user', prompt);
+      await SupabaseService.saveMessage(userNumber, 'assistant', `Laporan keuangan PDF untuk ${periodText} telah dibuat`);
+
+      return {
+        image: pdfBuffer,
+        imageCaption: caption,
+        log: `PDF Report generated for ${pengirim} - Period: ${period}, Transactions: ${reportData.transactions.length}, Total: ${this.formatRupiah(reportData.totalExpense)}`
+      };
+
+    } catch (error) {
+      this.logger.error('Error generating PDF report:', error);
+      
+      const errorReply = `❌ **Maaf, tidak bisa membuat laporan PDF**\n\n` +
+        `🔍 **Kemungkinan penyebab**:\n` +
+        `• Belum ada data transaksi untuk periode ini\n` +
+        `• Gangguan sistem sementara\n\n` +
+        `💡 **Solusi**:\n` +
+        `• Coba lagi beberapa saat\n` +
+        `• Pastikan sudah ada transaksi tercatat\n` +
+        `• Gunakan period yang berbeda`;
+
+      await SupabaseService.saveMessage(userNumber, 'user', prompt);
+      await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
+
+      return {
+        reply: errorReply,
+        log: `PDF Report Error for ${pengirim}: ${error.message}`
+      };
+    }
   }
 
   /**
