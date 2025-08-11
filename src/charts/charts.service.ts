@@ -52,13 +52,16 @@ export class ChartsService {
   // Professional utility methods
   private formatRupiahCompact(value: number): string {
     if (value >= 1000000000) {
-      return `${(value / 1000000000).toFixed(1)}M`;
+      const billions = (value / 1000000000).toFixed(1);
+      return `Rp ${billions} M`;
     } else if (value >= 1000000) {
-      return `${(value / 1000000).toFixed(1)}jt`;
+      const millions = (value / 1000000).toFixed(1);
+      return `Rp ${millions} jt`;
     } else if (value >= 1000) {
-      return `${Math.round(value / 1000)}rb`;
+      const thousands = Math.round(value / 1000);
+      return `Rp ${thousands} rb`;
     }
-    return `${value.toLocaleString('id-ID')}`;
+    return `Rp ${value.toLocaleString('id-ID')}`;
   }
 
   private formatRupiahFull(value: number): string {
@@ -156,13 +159,22 @@ export class ChartsService {
 
   private formatCompactRupiah(value: number): string {
     if (value >= 1000000000) {
-      return `${(value / 1000000000).toFixed(1)}M`;
+      const billions = (value / 1000000000).toFixed(1);
+      return `Rp ${billions} M`;
     } else if (value >= 1000000) {
-      return `${(value / 1000000).toFixed(1)}jt`;
+      const millions = (value / 1000000).toFixed(1);
+      return `Rp ${millions} jt`;
     } else if (value >= 1000) {
-      return `${Math.round(value / 1000)}rb`;
+      const thousands = Math.round(value / 1000);
+      return `Rp ${thousands} rb`;
     }
-    return `${value.toLocaleString('id-ID')}`;
+    // Untuk angka kecil, gunakan format penuh dengan titik pemisah
+    return new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(value);
   }
 
   private calculatePercentage(value: number, total: number): string {
@@ -247,10 +259,10 @@ export class ChartsService {
         maintainAspectRatio: false,
         layout: {
           padding: {
-            top: 40,
-            bottom: 60,
-            left: 60,
-            right: 60
+            top: 80,
+            bottom: 100,
+            left: 120,
+            right: 120 // More padding for external labels with leader lines
           }
         },
         plugins: {
@@ -328,54 +340,58 @@ export class ChartsService {
               },
               label: (context: any) => {
                 const value = context.parsed;
-                const percentage = this.calculatePercentage(value, total);
+                const percentage = ((value / total) * 100);
+                const percentageStr = percentage % 1 === 0 ? `${percentage}%` : `${percentage.toFixed(1)}%`;
                 const rupiah = this.formatRupiah(value);
                 return [
-                  `Nilai: ${rupiah}`,
-                  `Persentase: ${percentage}`,
-                  `Dari total: ${this.formatRupiah(total)}`
+                  `💰 Nominal: ${rupiah}`,
+                  `📊 Persentase: ${percentageStr}`,
+                  `🎯 Total keseluruhan: ${this.formatRupiah(total)}`
                 ];
               }
             }
           },
           datalabels: {
-            display: (context: any) => {
-              // Only show labels for segments >= 4% to avoid overcrowding
+            display: true,
+            color: (context: any) => {
               const value = context.parsed;
               const percentage = (value / total) * 100;
-              return percentage >= 4;
-            },
-            color: (context: any) => {
-              // Smart text color based on background brightness
+              
+              // For small segments (<5%), use dark color since they'll be outside
+              if (percentage < 5) {
+                return '#2D3748';
+              }
+              
+              // For larger segments, use contrast color based on background
               const bgColor = backgroundColors[context.dataIndex];
               return this.getContrastColor(bgColor);
             },
             font: {
               weight: 'bold',
-              size: 12,
+              size: 13,
               family: "'Inter', 'Plus Jakarta Sans', 'Poppins', system-ui, -apple-system, sans-serif"
             },
             formatter: (value: number, context: any) => {
-              const percentage = this.calculatePercentage(value, total);
-              const compactRupiah = this.formatCompactRupiah(value);
-              
-              // Show percentage and compact rupiah format, each on new line
-              return `${percentage}\n${compactRupiah}`;
+              // Only show percentage, rounded to 1 decimal if needed
+              const percentage = (value / total) * 100;
+              return percentage % 1 === 0 ? `${percentage}%` : `${percentage.toFixed(1)}%`;
             },
-            // Position labels to stay within segments
-            anchor: 'center',
-            align: 'center',
-            offset: 0,
-            rotation: 0, // Keep text horizontal for better readability
-            // Ensure text stays within arc boundaries
-            clip: true,
-            // Add subtle text outline for better readability
-            textStrokeColor: 'rgba(0, 0, 0, 0.2)',
-            textStrokeWidth: 1,
-            // Multi-line support
-            lineHeight: 1.2,
-            // Prevent text overflow
-            textAlign: 'center'
+            // Use external positioning for all labels to prevent overlap
+            anchor: 'end', // Position at edge of segment
+            align: 'end', // Align text to end of anchor line
+            offset: 15, // Distance from chart edge
+            // Draw leader lines for all segments
+            borderColor: '#CBD5E0',
+            borderWidth: 1,
+            borderRadius: 2,
+            // Consistent external styling
+            backgroundColor: 'rgba(255, 255, 255, 0.9)',
+            padding: 4,
+            // Keep text readable with subtle stroke
+            textStrokeColor: 'rgba(0, 0, 0, 0.1)',
+            textStrokeWidth: 0.5,
+            // Allow labels outside chart
+            clip: false
           }
         },
         animation: {
@@ -415,11 +431,11 @@ export class ChartsService {
           ctx.font = "bold 18px 'Inter', 'Plus Jakarta Sans', 'Poppins', system-ui, -apple-system, sans-serif";
           ctx.fillText('Total Pengeluaran', centerX, centerY - 18);
           
-          // Amount - using compact format for center text
+          // Amount - using full rupiah format for center text
           ctx.fillStyle = '#E53E3E';
-          ctx.font = "bold 26px 'Inter', 'Plus Jakarta Sans', 'Poppins', system-ui, -apple-system, sans-serif";
-          const compactTotal = this.formatRupiahCompact(total);
-          ctx.fillText(`Rp ${compactTotal}`, centerX, centerY + 18);
+          ctx.font = "bold 24px 'Inter', 'Plus Jakarta Sans', 'Poppins', system-ui, -apple-system, sans-serif";
+          const fullTotal = this.formatRupiah(total);
+          ctx.fillText(fullTotal, centerX, centerY + 18);
           
           ctx.restore();
         }
