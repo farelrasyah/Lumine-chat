@@ -607,10 +607,10 @@ export class MessageProcessorService {
         labels: spendingData.labels,
         values: spendingData.values,
         title: chartTitle,
-        highlightMax: true,
+        highlightMax: false, // Professional look without highlights
         doughnut: true,
-        width: 1200,
-        height: 700
+        width: 1400,
+        height: 900
       });
 
       // Format total amount
@@ -621,32 +621,37 @@ export class MessageProcessorService {
         maximumFractionDigits: 0
       }).format(spendingData.total);
 
-      // Create detailed breakdown for caption
-      const categoryBreakdown = spendingData.labels
-        .map((label, index) => {
-          const value = spendingData.values[index];
-          const percentage = ((value / spendingData.total) * 100).toFixed(1);
+      // Create professional breakdown for caption (top categories only)
+      const topCategories = spendingData.labels
+        .map((label, index) => ({
+          label,
+          value: spendingData.values[index],
+          percentage: ((spendingData.values[index] / spendingData.total) * 100)
+        }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 4); // Top 4 categories
+
+      const categoryBreakdown = topCategories
+        .map(cat => {
           const formatted = new Intl.NumberFormat('id-ID', {
             style: 'currency',
             currency: 'IDR',
             minimumFractionDigits: 0,
             maximumFractionDigits: 0
-          }).format(value);
-          return `  • ${label}: ${formatted} (${percentage}%)`;
+          }).format(cat.value);
+          return `  ▪️ ${cat.label}: ${formatted} (${cat.percentage.toFixed(1)}%)`;
         })
-        .slice(0, 5) // Show top 5 categories
         .join('\n');
 
-      const imageCaption = `📊 *Chart Pengeluaran ${periodLabel}*\n\n` +
-        `💰 *Total Pengeluaran:* ${totalFormatted}\n\n` +
-        `� *Breakdown per Kategori:*\n${categoryBreakdown}` +
-        `${spendingData.labels.length > 5 ? '\n  • ...' : ''}\n\n` +
-        `⏰ Periode: ${periodLabel}\n` +
-        `📅 Generated: ${new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}\n\n` +
-        `💡 *Perintah lainnya:*\n` +
-        `• chart pengeluaran [hari ini|minggu ini|bulan ini]\n` +
-        `• chart pengeluaran [YYYY-MM] (contoh: 2025-08)\n` +
-        `• chart pengeluaran [tgl mulai] s.d [tgl akhir]`;
+      const imageCaption = `🎯 *ANALISIS PENGELUARAN ${periodLabel.toUpperCase()}*\n\n` +
+        `💰 *Total:* ${totalFormatted}\n` +
+        `📊 *Kategori Terbesar:*\n${categoryBreakdown}\n` +
+        `${spendingData.labels.length > 4 ? `  ▪️ +${spendingData.labels.length - 4} kategori lainnya` : ''}\n\n` +
+        `📈 *Quick Insight:* ${topCategories[0] ? `${topCategories[0].label} mendominasi (${topCategories[0].percentage.toFixed(1)}%)` : 'Data tersedia'}\n\n` +
+        `⚡ *Quick Commands:*\n` +
+        `• \`chart pengeluaran minggu ini\`\n` +
+        `• \`chart pengeluaran 2025-08\`\n` +
+        `• \`analisis pengeluaran ${periodLabel.toLowerCase()}\``;
 
       // Save success message to database
       const successMessage = `Chart pengeluaran ${periodLabel} berhasil dibuat dengan total ${totalFormatted}`;

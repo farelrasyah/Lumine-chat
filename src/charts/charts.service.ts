@@ -14,45 +14,136 @@ export interface BuildSpendingPieParams {
 
 @Injectable()
 export class ChartsService {
-  // Modern gradient color palette with better contrast and visual appeal
-  private readonly modernColorPalette = [
-    '#FF6B6B', // Vibrant coral
-    '#4ECDC4', // Teal
-    '#45B7D1', // Sky blue
-    '#96CEB4', // Mint green
-    '#FFEAA7', // Soft yellow
-    '#DDA0DD', // Plum
-    '#98D8C8', // Aquamarine
-    '#F7DC6F', // Light gold
-    '#BB8FCE', // Lavender
-    '#85C1E9', // Light blue
-    '#F8C471', // Peach
-    '#82E0AA', // Light green
-    '#F1948A', // Light coral
-    '#AED6F1', // Baby blue
-    '#D5A6BD', // Dusty rose
-    '#A9DFBF'  // Pale green
+  // OKLCH/HCL-based modern color palette (color-blind safe, high contrast)
+  // Inspired by Okabe-Ito and Material Design 3.0
+  private readonly professionalColorPalette = [
+    '#E53E3E', // Red (high contrast)
+    '#3182CE', // Blue
+    '#38A169', // Green
+    '#D69E2E', // Gold/Yellow
+    '#805AD5', // Purple
+    '#DD6B20', // Orange
+    '#319795', // Teal
+    '#C53030', // Dark Red
+    '#2B6CB0', // Dark Blue
+    '#2F855A', // Dark Green
+    '#B7791F', // Dark Gold
+    '#6B46C1', // Dark Purple
+    '#C05621', // Dark Orange
+    '#2C7A7B', // Dark Teal
+    '#9F7AEA', // Light Purple
+    '#4FD1C7'  // Light Teal
   ];
 
-  // Darker variants for highlighting
-  private readonly accentColorPalette = [
-    '#E74C3C', // Dark coral
-    '#16A085', // Dark teal
-    '#2980B9', // Dark blue
-    '#27AE60', // Dark green
-    '#F39C12', // Dark orange
-    '#8E44AD', // Dark purple
-    '#17A2B8', // Dark cyan
-    '#DC7633', // Dark gold
-    '#7D3C98', // Dark lavender
-    '#5DADE2', // Medium blue
-    '#E67E22', // Dark peach
-    '#58D68D', // Medium green
-    '#EC7063', // Medium coral
-    '#7FB3D3', // Medium baby blue
-    '#C39BD3', // Medium dusty rose
-    '#7DCEA0'  // Medium pale green
+  // Optimized palette for Indonesian financial data
+  private readonly indonesianPalette = [
+    { main: '#FF6B6B', dark: '#E53E3E', name: 'Merah Coral' },
+    { main: '#4ECDC4', dark: '#319795', name: 'Teal Modern' },
+    { main: '#45B7D1', dark: '#3182CE', name: 'Biru Langit' },
+    { main: '#96CEB4', dark: '#38A169', name: 'Hijau Mint' },
+    { main: '#FFEAA7', dark: '#D69E2E', name: 'Kuning Emas' },
+    { main: '#DDA0DD', dark: '#805AD5', name: 'Ungu Lavender' },
+    { main: '#F8C471', dark: '#DD6B20', name: 'Jingga Hangat' },
+    { main: '#82E0AA', dark: '#2F855A', name: 'Hijau Segar' },
+    { main: '#AED6F1', dark: '#2B6CB0', name: 'Biru Muda' },
+    { main: '#F1948A', dark: '#C53030', name: 'Salmon' }
   ];
+
+  // Professional utility methods
+  private formatRupiahCompact(value: number): string {
+    if (value >= 1000000000) {
+      return `${(value / 1000000000).toFixed(1)}M`;
+    } else if (value >= 1000000) {
+      return `${(value / 1000000).toFixed(1)}jt`;
+    } else if (value >= 1000) {
+      return `${Math.round(value / 1000)}rb`;
+    }
+    return `${value.toLocaleString('id-ID')}`;
+  }
+
+  private formatRupiahFull(value: number): string {
+    return new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(value);
+  }
+
+  private formatPercentage(value: number, total: number): string {
+    return ((value / total) * 100).toFixed(1) + '%';
+  }
+
+  private truncateLabel(label: string, maxLength: number = 15): string {
+    if (label.length <= maxLength) return label;
+    return label.substring(0, maxLength - 3) + '...';
+  }
+
+  // Clean up duplicate categories and merge small segments
+  private cleanupCategories(labels: string[], values: number[], minPercentage: number = 3): {
+    cleanLabels: string[];
+    cleanValues: number[];
+    hasOthers: boolean;
+  } {
+    const total = values.reduce((sum, val) => sum + val, 0);
+    const categoryMap = new Map<string, number>();
+    
+    // Merge duplicate categories
+    labels.forEach((label, index) => {
+      const cleanLabel = label.trim() || 'Tidak Berkategori';
+      const currentValue = categoryMap.get(cleanLabel) || 0;
+      categoryMap.set(cleanLabel, currentValue + values[index]);
+    });
+
+    // Sort by value descending
+    const sortedEntries = Array.from(categoryMap.entries())
+      .sort(([,a], [,b]) => b - a);
+
+    // Separate significant and small categories
+    const significantCategories: [string, number][] = [];
+    let othersTotal = 0;
+    
+    sortedEntries.forEach(([label, value]) => {
+      const percentage = (value / total) * 100;
+      if (percentage >= minPercentage) {
+        significantCategories.push([label, value]);
+      } else {
+        othersTotal += value;
+      }
+    });
+
+    // Add "Lainnya" if there are small categories
+    const hasOthers = othersTotal > 0;
+    if (hasOthers) {
+      significantCategories.push(['Lainnya', othersTotal]);
+    }
+
+    return {
+      cleanLabels: significantCategories.map(([label]) => label),
+      cleanValues: significantCategories.map(([, value]) => value),
+      hasOthers
+    };
+  }
+
+  // Generate smart colors based on data
+  private generateSmartColors(dataLength: number): {
+    backgroundColors: string[];
+    borderColors: string[];
+  } {
+    const backgroundColors: string[] = [];
+    const borderColors: string[] = [];
+
+    for (let i = 0; i < dataLength; i++) {
+      const colorIndex = i % this.indonesianPalette.length;
+      const colorSet = this.indonesianPalette[colorIndex];
+      
+      // Add slight transparency for better visual depth
+      backgroundColors.push(colorSet.main + 'E6'); // 90% opacity
+      borderColors.push(colorSet.dark);
+    }
+
+    return { backgroundColors, borderColors };
+  }
 
   private formatRupiah(value: number): string {
     return new Intl.NumberFormat('id-ID', {
@@ -65,13 +156,13 @@ export class ChartsService {
 
   private formatCompactRupiah(value: number): string {
     if (value >= 1000000000) {
-      return `Rp ${(value / 1000000000).toFixed(1)}M`;
+      return `${(value / 1000000000).toFixed(1)}M`;
     } else if (value >= 1000000) {
-      return `Rp ${(value / 1000000).toFixed(1)}jt`;
+      return `${(value / 1000000).toFixed(1)}jt`;
     } else if (value >= 1000) {
-      return `Rp ${(value / 1000).toFixed(0)}rb`;
+      return `${Math.round(value / 1000)}rb`;
     }
-    return this.formatRupiah(value);
+    return `${value.toLocaleString('id-ID')}`;
   }
 
   private calculatePercentage(value: number, total: number): string {
@@ -79,15 +170,41 @@ export class ChartsService {
     return percentage.toFixed(1) + '%';
   }
 
+  /**
+   * Merge small categories into "Lainnya" if they're less than 3% of total
+   */
+  private optimizeCategories(labels: string[], values: number[], minPercentage: number = 3): { labels: string[], values: number[] } {
+    const total = values.reduce((sum, val) => sum + val, 0);
+    const optimized: { labels: string[], values: number[] } = { labels: [], values: [] };
+    let othersTotal = 0;
+    
+    for (let i = 0; i < labels.length; i++) {
+      const percentage = (values[i] / total) * 100;
+      if (percentage >= minPercentage) {
+        optimized.labels.push(labels[i]);
+        optimized.values.push(values[i]);
+      } else {
+        othersTotal += values[i];
+      }
+    }
+    
+    if (othersTotal > 0) {
+      optimized.labels.push('Lainnya');
+      optimized.values.push(othersTotal);
+    }
+    
+    return optimized;
+  }
+
   async buildSpendingPiePng(input: BuildSpendingPieParams): Promise<Buffer> {
     const {
       labels,
       values,
       title = 'Pengeluaran per Kategori',
-      highlightMax = true,
+      highlightMax = false, // Disable highlighting for cleaner look
       locale = 'id-ID',
-      width = 1200,
-      height = 700,
+      width = 1400,
+      height = 900,
       doughnut = true
     } = input;
 
@@ -95,44 +212,34 @@ export class ChartsService {
       throw new Error('Labels and values cannot be empty');
     }
 
-    const total = values.reduce((sum, val) => sum + val, 0);
+    // Optimize categories (merge small ones)
+    const optimized = this.optimizeCategories(labels, values, 2.5);
+    const total = optimized.values.reduce((sum, val) => sum + val, 0);
     
-    // Find index of maximum value for highlighting
-    const maxIndex = highlightMax ? values.indexOf(Math.max(...values)) : -1;
-    
-    // Prepare modern gradient colors with transparency
-    const backgroundColors = labels.map((_, index) => {
-      const baseColor = this.modernColorPalette[index % this.modernColorPalette.length];
-      if (highlightMax && index === maxIndex) {
-        return baseColor; // Full opacity for max
-      }
-      return baseColor + 'E6'; // Add transparency (90%)
+    // Generate dynamic colors from Indonesian palette
+    const backgroundColors = optimized.labels.map((_, index) => {
+      const paletteIndex = index % this.indonesianPalette.length;
+      return this.indonesianPalette[paletteIndex].main;
     });
 
-    const borderColors = labels.map((_, index) => {
-      if (highlightMax && index === maxIndex) {
-        return this.accentColorPalette[index % this.accentColorPalette.length];
-      }
-      return this.modernColorPalette[index % this.modernColorPalette.length];
+    const borderColors = optimized.labels.map((_, index) => {
+      const paletteIndex = index % this.indonesianPalette.length;
+      return this.indonesianPalette[paletteIndex].dark;
     });
 
-    // Create advanced chart configuration
+    // Professional chart configuration
     const chartConfig = {
       type: doughnut ? 'doughnut' : 'pie',
       data: {
-        labels: labels,
+        labels: optimized.labels,
         datasets: [{
-          data: values,
+          data: optimized.values,
           backgroundColor: backgroundColors,
-          borderColor: borderColors,
-          borderWidth: highlightMax ? labels.map((_, index) => index === maxIndex ? 4 : 2) : 2,
+          borderColor: '#FFFFFF', // White separator between segments
+          borderWidth: 3, // Thicker separator for clarity
           hoverBorderWidth: 4,
           hoverBorderColor: '#FFFFFF',
-          // Add shadow effect
-          shadowOffsetX: 3,
-          shadowOffsetY: 3,
-          shadowBlur: 10,
-          shadowColor: 'rgba(0, 0, 0, 0.2)'
+          hoverOffset: 8 // Slight expansion on hover
         }]
       },
       options: {
@@ -140,10 +247,10 @@ export class ChartsService {
         maintainAspectRatio: false,
         layout: {
           padding: {
-            top: 20,
-            bottom: 20,
-            left: 20,
-            right: 20
+            top: 40,
+            bottom: 60,
+            left: 60,
+            right: 60
           }
         },
         plugins: {
@@ -151,44 +258,46 @@ export class ChartsService {
             display: true,
             text: [title, `Total: ${this.formatRupiah(total)}`],
             font: {
-              size: 24,
+              size: 28,
               weight: 'bold',
-              family: 'Inter, system-ui, -apple-system, sans-serif'
+              family: "'Inter', 'Plus Jakarta Sans', 'Poppins', system-ui, -apple-system, sans-serif"
             },
-            color: '#2C3E50',
+            color: '#1a202c', // Dark gray for title
             padding: {
-              top: 15,
-              bottom: 30
+              top: 20,
+              bottom: 40
             }
           },
           legend: {
             display: true,
-            position: 'right',
+            position: 'bottom',
             align: 'center',
             labels: {
               usePointStyle: true,
               pointStyle: 'circle',
+              pointRadius: 8,
               font: {
-                size: 14,
-                family: 'Inter, system-ui, -apple-system, sans-serif',
+                size: 16,
+                family: "'Inter', 'Plus Jakarta Sans', 'Poppins', system-ui, -apple-system, sans-serif",
                 weight: '500'
               },
-              color: '#34495E',
-              padding: 20,
+              color: '#2d3748', // Slightly darker gray
+              padding: 25,
+              boxWidth: 16,
               generateLabels: (chart: any) => {
                 const data = chart.data;
                 return data.labels.map((label: string, index: number) => {
-                  const value = values[index];
+                  const value = optimized.values[index];
                   const percentage = this.calculatePercentage(value, total);
-                  const compactValue = this.formatCompactRupiah(value);
+                  const formatted = this.formatCompactRupiah(value);
                   
                   return {
-                    text: `${label}  ${percentage}  (${compactValue})`,
+                    text: `${label}  •  ${percentage}  •  ${formatted}`,
                     fillStyle: backgroundColors[index],
                     strokeStyle: borderColors[index],
-                    lineWidth: highlightMax && index === maxIndex ? 3 : 1,
+                    lineWidth: 2,
                     pointStyle: 'circle',
-                    pointRadius: highlightMax && index === maxIndex ? 8 : 6
+                    pointRadius: 8
                   };
                 });
               }
@@ -196,25 +305,26 @@ export class ChartsService {
           },
           tooltip: {
             enabled: true,
-            backgroundColor: 'rgba(44, 62, 80, 0.95)',
+            backgroundColor: 'rgba(26, 32, 44, 0.95)', // Dark professional background
             titleColor: '#FFFFFF',
             titleFont: {
-              size: 16,
+              size: 18,
               weight: 'bold',
-              family: 'Inter, system-ui, -apple-system, sans-serif'
+              family: "'Inter', 'Plus Jakarta Sans', 'Poppins', system-ui, -apple-system, sans-serif"
             },
             bodyColor: '#FFFFFF',
             bodyFont: {
-              size: 14,
-              family: 'Inter, system-ui, -apple-system, sans-serif'
+              size: 16,
+              family: "'Inter', 'Plus Jakarta Sans', 'Poppins', system-ui, -apple-system, sans-serif"
             },
-            borderColor: '#BDC3C7',
+            borderColor: '#E2E8F0',
             borderWidth: 1,
-            cornerRadius: 8,
+            cornerRadius: 12,
+            padding: 16,
             displayColors: true,
             callbacks: {
               title: (context: any) => {
-                return context[0].label;
+                return `📊 ${context[0].label}`;
               },
               label: (context: any) => {
                 const value = context.parsed;
@@ -228,67 +338,92 @@ export class ChartsService {
               }
             }
           },
-          // Enhanced data labels
           datalabels: {
-            display: true,
-            color: '#FFFFFF',
+            display: (context: any) => {
+              // Only show labels for segments >= 4% to avoid overcrowding
+              const value = context.parsed;
+              const percentage = (value / total) * 100;
+              return percentage >= 4;
+            },
+            color: (context: any) => {
+              // Smart text color based on background brightness
+              const bgColor = backgroundColors[context.dataIndex];
+              return this.getContrastColor(bgColor);
+            },
             font: {
               weight: 'bold',
               size: 12,
-              family: 'Inter, system-ui, -apple-system, sans-serif'
+              family: "'Inter', 'Plus Jakarta Sans', 'Poppins', system-ui, -apple-system, sans-serif"
             },
             formatter: (value: number, context: any) => {
               const percentage = this.calculatePercentage(value, total);
-              // Only show percentage if it's >= 3% to avoid clutter
-              return parseFloat(percentage) >= 3 ? percentage : '';
+              const compactRupiah = this.formatCompactRupiah(value);
+              
+              // Show percentage and compact rupiah format, each on new line
+              return `${percentage}\n${compactRupiah}`;
             },
-            textStrokeColor: 'rgba(0, 0, 0, 0.3)',
-            textStrokeWidth: 1,
-            // Position labels nicely
+            // Position labels to stay within segments
             anchor: 'center',
-            align: 'center'
+            align: 'center',
+            offset: 0,
+            rotation: 0, // Keep text horizontal for better readability
+            // Ensure text stays within arc boundaries
+            clip: true,
+            // Add subtle text outline for better readability
+            textStrokeColor: 'rgba(0, 0, 0, 0.2)',
+            textStrokeWidth: 1,
+            // Multi-line support
+            lineHeight: 1.2,
+            // Prevent text overflow
+            textAlign: 'center'
           }
         },
-        // Enhanced animations
         animation: {
           animateRotate: true,
           animateScale: false,
-          duration: 2000,
+          duration: 1800,
           easing: 'easeOutQuart'
         },
-        // Custom cutout for doughnut
-        cutout: doughnut ? '60%' : '0%',
-        // Better spacing
-        spacing: 2
-      },
-      // Add custom plugins for center text in doughnut
-      plugins: doughnut ? [{
-        id: 'centerText',
-        beforeDraw: (chart: any) => {
-          if (chart.config.type === 'doughnut') {
-            const ctx = chart.ctx;
-            const centerX = (chart.chartArea.left + chart.chartArea.right) / 2;
-            const centerY = (chart.chartArea.top + chart.chartArea.bottom) / 2;
-            
-            ctx.save();
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            
-            // Main total text
-            ctx.fillStyle = '#2C3E50';
-            ctx.font = 'bold 18px Inter, system-ui, -apple-system, sans-serif';
-            ctx.fillText('Total Pengeluaran', centerX, centerY - 15);
-            
-            // Amount text
-            ctx.fillStyle = '#E74C3C';
-            ctx.font = 'bold 24px Inter, system-ui, -apple-system, sans-serif';
-            const compactTotal = this.formatCompactRupiah(total);
-            ctx.fillText(compactTotal, centerX, centerY + 15);
-            
-            ctx.restore();
+        cutout: doughnut ? '42%' : '0%', // Perfect donut ratio
+        spacing: 4, // Space between segments
+        // Remove hover animations for cleaner look
+        onHover: () => {},
+        elements: {
+          arc: {
+            // Smooth arc transitions
+            borderJoinStyle: 'round'
           }
         }
-      }] : []
+      }
+    };
+
+    // Add custom center text plugin for donut charts
+    const centerTextPlugin = {
+      id: 'centerText',
+      beforeDraw: (chart: any) => {
+        if (chart.config.type === 'doughnut') {
+          const ctx = chart.ctx;
+          const centerX = (chart.chartArea.left + chart.chartArea.right) / 2;
+          const centerY = (chart.chartArea.top + chart.chartArea.bottom) / 2;
+          
+          ctx.save();
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          
+          // Main label
+          ctx.fillStyle = '#4A5568';
+          ctx.font = "bold 18px 'Inter', 'Plus Jakarta Sans', 'Poppins', system-ui, -apple-system, sans-serif";
+          ctx.fillText('Total Pengeluaran', centerX, centerY - 18);
+          
+          // Amount - using compact format for center text
+          ctx.fillStyle = '#E53E3E';
+          ctx.font = "bold 26px 'Inter', 'Plus Jakarta Sans', 'Poppins', system-ui, -apple-system, sans-serif";
+          const compactTotal = this.formatRupiahCompact(total);
+          ctx.fillText(`Rp ${compactTotal}`, centerX, centerY + 18);
+          
+          ctx.restore();
+        }
+      }
     };
 
     try {
@@ -299,34 +434,48 @@ export class ChartsService {
         height: height,
         format: 'png',
         backgroundColor: '#FFFFFF',
-        // Add quality settings for better output
-        quality: 0.9,
-        // Enable plugins
-        plugins: {
-          datalabels: {
-            version: 'latest'
-          }
-        }
+        devicePixelRatio: 2.0, // HD quality
+        version: '3.9.1', // Latest Chart.js version
+        plugins: [centerTextPlugin]
       }, {
         responseType: 'arraybuffer',
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'LumineChat/1.0'
+          'User-Agent': 'LumineChat/2.0 (Professional Charts)'
         },
-        timeout: 45000 // Increased timeout for complex charts
+        timeout: 60000 // Extended timeout for HD rendering
       });
 
       return Buffer.from(response.data);
       
     } catch (error) {
-      console.error('Error generating modern chart:', error);
+      console.error('Error generating professional chart:', error);
       
-      // Enhanced fallback with better error handling
       if (error.response) {
-        console.error('Response error:', error.response.status, error.response.data);
+        console.error('API Response:', error.response.status, error.response.statusText);
+        console.error('Error details:', error.response.data?.toString?.() || error.response.data);
       }
       
-      throw new Error(`Failed to generate modern chart: ${error.message}`);
+      throw new Error(`Failed to generate professional chart: ${error.message}`);
     }
+  }
+
+  /**
+   * Calculate contrast color for text based on background
+   */
+  private getContrastColor(hexColor: string): string {
+    // Remove # if present
+    const color = hexColor.replace('#', '');
+    
+    // Convert to RGB
+    const r = parseInt(color.substr(0, 2), 16);
+    const g = parseInt(color.substr(2, 2), 16);
+    const b = parseInt(color.substr(4, 2), 16);
+    
+    // Calculate luminance
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    
+    // Return white for dark backgrounds, dark for light backgrounds
+    return luminance > 0.5 ? '#2D3748' : '#FFFFFF';
   }
 }
