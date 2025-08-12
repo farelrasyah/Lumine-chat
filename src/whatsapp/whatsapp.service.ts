@@ -101,14 +101,8 @@ export class WhatsAppService implements OnModuleInit {
             caption: response.documentCaption
           }, { quoted: msg });
           
-          // Send image with caption
-          await this.sock.sendMessage(msg.key.remoteJid, {
-            image: response.image,
-            caption: response.imageCaption
-          }, { quoted: msg });
-          
           this.logger.log(log);
-        } 
+        }
         // Standard text reply
         else if (response.reply) {
           await this.sock.sendMessage(msg.key.remoteJid, { text: response.reply }, { quoted: msg });
