@@ -50,69 +50,67 @@ export class WhatsAppService implements OnModuleInit {
 
   async handleIncomingMessage(msg: any) {
     try {
-      // Get message text
-      const messageText = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+      let typingSent = false;
+      let typingMsg;
+      let typingTimeout: NodeJS.Timeout | undefined;
       
-      // Check if message is directed to bot (contains @lumine)
-      const isBotMention = messageText.toLowerCase().includes('@lumine');
+      // Mulai proses AI dan timeout bersamaan
+      const aiPromise = this.messageProcessor.processMessage(msg);
+      const timeoutPromise = new Promise<void>(resolve => {
+        typingTimeout = setTimeout(async () => {
+          typingSent = true;
+          typingMsg = await this.sock.sendMessage(msg.key.remoteJid, { text: 'Lumine sedang menyiapkan jawabannya...' }, { quoted: msg });
+          resolve();
+        }, 1500);
+      });
       
-      let progressMessageId: string | null = null;
-      let progressTimeout: NodeJS.Timeout | null = null;
+      // Tunggu mana yang lebih dulu selesai: AI atau timeout
+      const result = await Promise.race([aiPromise.then(() => 'ai'), timeoutPromise.then(() => 'timeout')]);
+      let response, log;
       
-      // Only set up progress message for bot mentions
-      if (isBotMention) {
-        progressTimeout = setTimeout(async () => {
-          try {
-            this.logger.debug('Sending progress message for bot mention...');
-            const progressText = "Lumine sedang menyiapkan jawabannya...";
-            const progressMessage = await this.sock.sendMessage(msg.key.remoteJid, {
-              text: progressText
-            }, { quoted: msg });
-            progressMessageId = progressMessage?.key?.id || null;
-            this.logger.debug(`Progress message sent with ID: ${progressMessageId}`);
-          } catch (error) {
-            this.logger.warn(`Failed to send progress message: ${error.message}`);
-          }
-        }, 200); // Show progress after 1 second
+      if (result === 'ai') {
+        // AI selesai duluan, batalkan timeout
+        if (typingTimeout) clearTimeout(typingTimeout);
+        response = await aiPromise;
+      } else {
+        // Timeout duluan, tunggu AI selesai
+        response = await aiPromise;
       }
 
-      // Process message
-      const startTime = Date.now();
-      const response = await this.messageProcessor.processMessage(msg);
-      const processingTime = Date.now() - startTime;
-      
-      // Clear progress timeout if processing finished quickl
-      
-      let log = '';
-      
       // Handle different response types
       if (response) {
         log = response.log;
         
         // If response includes an image (for chart commands)
         if (response.image && response.imageCaption) {
-          // Check if this is a PDF (for PDF reports)
-          if (response.log && response.log.includes('PDF Report')) {
-            // Send as document for PDF
-            await this.sock.sendMessage(msg.key.remoteJid, {
-              document: response.image,
-              fileName: `Laporan_Keuangan_${new Date().toISOString().split('T')[0]}.pdf`,
-              mimetype: 'application/pdf',
-              caption: response.imageCaption
-            }, { quoted: msg });
-          } else {
-            // Send as image for charts
-            await this.sock.sendMessage(msg.key.remoteJid, {
-              image: response.image,
-              caption: response.imageCaption
-            }, { quoted: msg });
+          // Delete typing message if sent
+          if (typingSent && typingMsg) {
+            try {
+              await this.sock.sendMessage(msg.key.remoteJid, { delete: typingMsg.key });
+            } catch (e) {
+              this.logger.warn('Could not delete typing message');
+            }
           }
+          
+          // Send image with caption
+          await this.sock.sendMessage(msg.key.remoteJid, {
+            image: response.image,
+            caption: response.imageCaption
+          }, { quoted: msg });
           
           this.logger.log(log);
         } 
         // Standard text reply
         else if (response.reply) {
-          // Send text reply
+          // Delete typing message if sent
+          if (typingSent && typingMsg) {
+            try {
+              await this.sock.sendMessage(msg.key.remoteJid, { delete: typingMsg.key });
+            } catch (e) {
+              this.logger.warn('Could not delete typing message');
+            }
+          }
+          
           await this.sock.sendMessage(msg.key.remoteJid, { text: response.reply }, { quoted: msg });
           this.logger.log(log);
         }
@@ -127,48 +125,5 @@ export class WhatsAppService implements OnModuleInit {
   async sendMessage(jid: string, text: string, msg: any) {
     // Kirim jawaban dalam satu bubble, apapun panjangnya
     await this.sock.sendMessage(jid, { text }, { quoted: msg });
-  }
-
-  /**
-   * Check if the message requires long-running operations
-   */
-  private isLongRunningOperation(messageText: string): boolean {
-    const longRunningPatterns = [
-      /chart/i,                    // Chart generation
-      /analisis/i,                 // Analysis operations
-      /laporan/i,                  // Report generation
-      /statistik/i,                // Statistics
-      /ringkasan/i,                // Summary
-      /budget.*alert/i,            // Budget alerts
-      /pengeluaran.*hari/i,        // Daily spending analysis
-      /pengeluaran.*minggu/i,      // Weekly spending analysis
-      /pengeluaran.*bulan/i,       // Monthly spending analysis
-      /total.*pengeluaran/i        // Total spending calculations
-    ];
-
-    return longRunningPatterns.some(pattern => pattern.test(messageText));
-  }
-
-  /**
-   * Get appropriate progress message based on operation type
-   */
-  private getProgressMessage(messageText: string): string {
-    if (/chart/i.test(messageText)) {
-      return '📊 Lumine sedang membuat chart untuk Anda...';
-    }
-    if (/analisis/i.test(messageText)) {
-      return '🔍 Lumine sedang menganalisis data Anda...';
-    }
-    if (/laporan|ringkasan/i.test(messageText)) {
-      return '📋 Lumine sedang menyiapkan laporan...';
-    }
-    if (/budget/i.test(messageText)) {
-      return '💰 Lumine sedang mengecek budget Anda...';
-    }
-    if (/pengeluaran/i.test(messageText)) {
-      return '📈 Lumine sedang menghitung pengeluaran...';
-    }
-    
-    return 'Lumine sedang menyiapkan jawabannya...';
   }
 }
