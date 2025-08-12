@@ -1,0 +1,56 @@
+services:
+  # Main WhatsApp Bot Service (Background Worker)
+  - type: worker
+    name: lumine-chat-bot
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm run start:prod
+    plan: starter
+    region: singapore
+    buildFilter:
+      paths:
+        - src/**
+        - package*.json
+        - tsconfig*.json
+        - nest-cli.json
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: AI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: GOOGLE_SHEET_CREDENTIALS_PATH
+        value: src/credentials/credentials.json
+      - key: TZ
+        value: Asia/Jakarta
+    
+    # Auto restart configuration
+    autoDeploy: true
+    repo: https://github.com/farelrasyah/Lumine-chat.git
+    branch: main
+    
+  # Health Check Web Service (Optional - untuk monitoring)
+  - type: web
+    name: lumine-chat-health
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: node -e "require('./dist/health-check').startHealthServer()"
+    plan: free
+    region: singapore
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: HEALTH_CHECK_PORT
+        value: 10000
+    
+    # Health check endpoint
+    healthCheckPath: /health

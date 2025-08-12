@@ -12,13 +12,21 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
+    "start:worker": "node dist/main",
+    "start:health": "node dist/health/health-server",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "test:finance": "node test-finance-features.js"
+    "test:finance": "node test-finance-features.js",
+    "deploy:build": "npm ci --only=production && npm run build",
+    "deploy:start": "NODE_ENV=production npm run start:prod",
+    "deploy:check": "node scripts/deployment-check.js",
+    "deploy:encode-creds": "node scripts/encode-credentials.js",
+    "deploy:keep-alive": "node scripts/keep-alive.js",
+    "postinstall": "npm run build || echo 'Build failed, continuing...'"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",

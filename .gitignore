@@ -35,19 +35,31 @@ lerna-debug.log*
 !.vscode/launch.json
 !.vscode/extensions.json
 
-# dotenv environment variable files
+# Environment variables and secrets
 .env
 .env.development.local
-.env
-src/credentials/credentials.json
-credentials.json
-.env.local
-
-# Google credentials
-src/credentials/credentials.json
 .env.test.local
 .env.production.local
 .env.local
+
+# Google Sheets credentials
+src/credentials/credentials.json
+credentials.json
+credentials-base64.txt
+google-credentials.json
+
+# WhatsApp session data
+baileys_auth_info/
+session_auth_info/
+
+# Deployment secrets
+render-secrets.txt
+deployment-keys.txt
+
+# Temporary files
+temp/
+tmp/
+*.tmp
 
 # temp directory
 .temp

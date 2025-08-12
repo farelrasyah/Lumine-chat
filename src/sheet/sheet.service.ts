@@ -12,12 +12,29 @@ export class SheetService {
   private logger = new Logger(SheetService.name);
 
   constructor() {
-    // Path credentials bisa diatur lewat env, default ke src/credentials/credentials.json
-    const credentialsPath = process.env.GOOGLE_SHEET_CREDENTIALS_PATH || 'src/credentials/credentials.json';
-    if (!fs.existsSync(path.resolve(credentialsPath))) {
-      throw new Error(`Google credentials file not found at ${credentialsPath}. Set GOOGLE_SHEET_CREDENTIALS_PATH env variable if you move the file.`);
+    let credentials;
+    
+    // Try to get credentials from base64 environment variable first (for deployment)
+    const credentialsBase64 = process.env.GOOGLE_CREDENTIALS_BASE64;
+    if (credentialsBase64) {
+      try {
+        const credentialsString = Buffer.from(credentialsBase64, 'base64').toString('utf8');
+        credentials = JSON.parse(credentialsString);
+        this.logger.log('Google credentials loaded from base64 environment variable');
+      } catch (error) {
+        this.logger.error('Failed to parse base64 credentials:', error);
+        throw new Error('Invalid GOOGLE_CREDENTIALS_BASE64 format');
+      }
+    } else {
+      // Fallback to file-based credentials (for local development)
+      const credentialsPath = process.env.GOOGLE_SHEET_CREDENTIALS_PATH || 'src/credentials/credentials.json';
+      if (!fs.existsSync(path.resolve(credentialsPath))) {
+        throw new Error(`Google credentials not found. Set GOOGLE_CREDENTIALS_BASE64 env variable or ensure file exists at ${credentialsPath}`);
+      }
+      credentials = JSON.parse(fs.readFileSync(path.resolve(credentialsPath), 'utf8'));
+      this.logger.log(`Google credentials loaded from file: ${credentialsPath}`);
     }
-    const credentials = JSON.parse(fs.readFileSync(path.resolve(credentialsPath), 'utf8'));
+    
     const scopes = ['https://www.googleapis.com/auth/spreadsheets'];
     const auth = new google.auth.GoogleAuth({
       credentials,
