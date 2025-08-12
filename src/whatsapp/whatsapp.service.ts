@@ -61,7 +61,7 @@ export class WhatsAppService implements OnModuleInit {
           typingSent = true;
           typingMsg = await this.sock.sendMessage(msg.key.remoteJid, { text: 'Lumine sedang menyiapkan jawabannya...' }, { quoted: msg });
           resolve();
-        }, 1500);
+        }, 200);
       });
       
       // Tunggu mana yang lebih dulu selesai: AI atau timeout
@@ -83,15 +83,6 @@ export class WhatsAppService implements OnModuleInit {
         
         // If response includes an image (for chart commands)
         if (response.image && response.imageCaption) {
-          // Delete typing message if sent
-          if (typingSent && typingMsg) {
-            try {
-              await this.sock.sendMessage(msg.key.remoteJid, { delete: typingMsg.key });
-            } catch (e) {
-              this.logger.warn('Could not delete typing message');
-            }
-          }
-          
           // Send image with caption
           await this.sock.sendMessage(msg.key.remoteJid, {
             image: response.image,
@@ -99,18 +90,21 @@ export class WhatsAppService implements OnModuleInit {
           }, { quoted: msg });
           
           this.logger.log(log);
+        }
+        // If response includes a document (for PDF reports)
+        else if (response.document && response.documentCaption) {
+          // Send document with caption
+          await this.sock.sendMessage(msg.key.remoteJid, {
+            document: response.document,
+            mimetype: 'application/pdf',
+            fileName: `Laporan_Keuangan_${new Date().toISOString().split('T')[0]}.pdf`,
+            caption: response.documentCaption
+          }, { quoted: msg });
+          
+          this.logger.log(log);
         } 
         // Standard text reply
         else if (response.reply) {
-          // Delete typing message if sent
-          if (typingSent && typingMsg) {
-            try {
-              await this.sock.sendMessage(msg.key.remoteJid, { delete: typingMsg.key });
-            } catch (e) {
-              this.logger.warn('Could not delete typing message');
-            }
-          }
-          
           await this.sock.sendMessage(msg.key.remoteJid, { text: response.reply }, { quoted: msg });
           this.logger.log(log);
         }

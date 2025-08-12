@@ -14,6 +14,7 @@ import { BudgetManagementService } from '../finance/budget-management.service';
 import { FinancialInsightService } from '../finance/financial-insight.service';
 import { ReportsService } from '../reports/reports.service';
 import { ChartsService } from '../charts/charts.service';
+import { PdfGeneratorService } from '../pdf/pdf-generator.service';
 
 @Injectable()
 export class MessageProcessorService {
@@ -28,6 +29,7 @@ export class MessageProcessorService {
     private readonly insightService: FinancialInsightService,
     private readonly reportsService: ReportsService,
     private readonly chartsService: ChartsService,
+    private readonly pdfGeneratorService: PdfGeneratorService,
   ) {}
 
   async processMessage(msg: any): Promise<{ reply?: string | null; log: string; image?: Buffer; imageCaption?: string }> {
@@ -150,6 +152,21 @@ export class MessageProcessorService {
       const chatContext = messages.map((m: any) => ({ role: m.role, content: m.content }));
       chatContext.push({ role: 'user', content: prompt });
 
+      // Check for menu commands FIRST
+      if (this.isMenuCommand(prompt)) {
+        try {
+          const menuResult = await this.handleMenuCommand(prompt, pengirim, msg);
+          if (menuResult) {
+            return menuResult;
+          }
+        } catch (error) {
+          this.logger.error('Error processing menu command:', error);
+          const errorReply = 'Maaf, terjadi kesalahan saat menampilkan menu.';
+          await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
+          return { reply: errorReply, log: `Menu Error: ${error}` };
+        }
+      }
+
       // Check for chart commands FIRST (before spending analysis)
       if (this.isChartCommand(prompt)) {
         try {
@@ -162,6 +179,21 @@ export class MessageProcessorService {
           const errorReply = 'Maaf, terjadi kesalahan saat membuat chart pengeluaran.';
           await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
           return { reply: errorReply, log: `Chart Error: ${error}` };
+        }
+      }
+
+      // Check for PDF report commands
+      if (this.isPdfCommand(prompt)) {
+        try {
+          const pdfResult = await this.handlePdfCommand(prompt, pengirim, msg);
+          if (pdfResult) {
+            return pdfResult;
+          }
+        } catch (error) {
+          this.logger.error('Error processing PDF command:', error);
+          const errorReply = 'Maaf, terjadi kesalahan saat membuat laporan PDF.';
+          await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
+          return { reply: errorReply, log: `PDF Error: ${error}` };
         }
       }
 
@@ -1547,6 +1579,113 @@ export class MessageProcessorService {
   }
 
   /**
+   * Check if message is a menu command
+   */
+  private isMenuCommand(prompt: string): boolean {
+    const menuPatterns = [
+      /\b(menu|start|mulai|bantuan|help|panduan|perintah|command)\b/i,
+      /^(menu|start|mulai|bantuan|help)$/i,
+      /apa.*bisa.*lu.*mine/i,
+      /fitur.*apa.*saja/i,
+      /gimana.*cara.*pake/i,
+      /cara.*menggunakan/i
+    ];
+
+    return menuPatterns.some(pattern => pattern.test(prompt.trim()));
+  }
+
+  /**
+   * Handle menu command
+   */
+  private async handleMenuCommand(prompt: string, pengirim: string, msg: any): Promise<{ reply: string; log: string }> {
+    const userNumber = msg.key?.remoteJid || msg.from || 'unknown';
+    
+    const menuResponse = `🌟 SELAMAT DATANG DI LUMINE 🌟
+Assistant keuangan pintar yang siap bantu hidup kamu jadi lebih teratur!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💰 CATAT PENGELUARAN - Super Gampang! 
+Langsung aja tulis seperti ini:
+• @lumine beli nasi padang 15000
+• @lumine makan siang di warteg 12 ribu 
+• @lumine bayar grab 25rb ke kantor
+• @lumine beli kopi starbucks 35k
+
+📊 LIHAT CHART & ANALISIS - Visual Keren!
+• @lumine chart pengeluaran bulan ini
+• @lumine chart pengeluaran minggu ini
+• @lumine analisis pengeluaran hari ini
+• @lumine total pengeluaran bulan ini
+
+🔍 CARI TRANSAKSI - Temukan Apapun! 
+• @lumine cari kopi
+• @lumine search starbucks
+• @lumine pencarian grab minggu ini
+
+💡 SIMULASI TABUNGAN - Planning Masa Depan!
+• @lumine simulasi tabungan 1000000
+• @lumine simulasi nabung 500 ribu per bulan
+• @lumine ingin nabung 2 juta
+
+📋 LAPORAN PDF - Profesional & Rapi!
+• @lumine laporan pdf bulan ini
+• @lumine laporan pdf minggu ini 
+• @lumine laporan pdf bulan lalu
+• @lumine unduh laporan Juli 2025
+
+🎯 BUDGET MANAGEMENT - Kontrol Pengeluaran!
+• @lumine set budget makanan 500000
+• @lumine budget transportasi 300rb per bulan
+• @lumine cek budget saya
+• @lumine status semua budget
+
+💸 DETEKSI BOROS/HEMAT - Tau Kondisi Keuangan!
+• @lumine apakah saya boros hari ini?
+• @lumine bagaimana pengeluaran minggu ini?
+• @lumine saya hemat atau boros?
+
+📈 INSIGHT & TIPS - Pintar Kelola Uang!
+• @lumine ringkasan keuangan bulan ini
+• @lumine kategori paling boros
+• @lumine tips berhemat
+• @lumine pengeluaran terbesar minggu ini
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✨ KENAPA PILIH LUMINE?
+🤖 Otomatis klasifikasi kategori (makanan, transport, dll)
+📊 Chart visual yang cantik & mudah dipahami  
+� Data aman tersimpan di cloud
+📱 Tinggal chat di WhatsApp, praktis banget!
+🧠 AI yang ngerti bahasa sehari-hari
+
+💡 TIPS CEPAT PAKAI LUMINE:
+✅ Tulis nominal bebas: 15000, 15rb, 15ribu, atau Rp15.000
+✅ Sebut tempat/brand biar auto ketahuan kategorinya
+✅ Bahasa santai juga dimengerti kok!
+✅ Tanya apa aja tentang keuangan kamu
+
+🚀 LANGSUNG MULAI YUK!
+Coba catat pengeluaran pertama kamu:
+@lumine beli kopi 12000 ☕️
+
+Atau lihat laporan keuangan:
+@lumine buat laporan pdf
+
+Happy financial planning! 💪`;
+
+    // Save messages
+    await SupabaseService.saveMessage(userNumber, 'user', prompt);
+    await SupabaseService.saveMessage(userNumber, 'assistant', menuResponse);
+
+    return {
+      reply: menuResponse,
+      log: `Menu displayed for ${pengirim}: ${prompt}`
+    };
+  }
+
+  /**
    * Check if prompt contains financial keywords (to avoid identity confusion)
    */
   private containsFinancialKeywords(prompt: string): boolean {
@@ -1558,5 +1697,211 @@ export class MessageProcessorService {
     
     const normalizedPrompt = prompt.toLowerCase();
     return financialKeywords.some(keyword => normalizedPrompt.includes(keyword));
+  }
+
+  /**
+   * Check if the message is a PDF report command
+   */
+  private isPdfCommand(prompt: string): boolean {
+    const pdfKeywords = [
+      'laporan pdf', 'pdf report', 'buat laporan pdf', 'download laporan',
+      'unduh laporan', 'export pdf', 'laporan keuangan pdf'
+    ];
+
+    const normalizedPrompt = prompt.toLowerCase();
+    return pdfKeywords.some(keyword => normalizedPrompt.includes(keyword));
+  }
+
+  /**
+   * Handle PDF report commands
+   */
+  private async handlePdfCommand(prompt: string, pengirim: string, msg: any): Promise<{ reply: string | null; log: string; document?: Buffer; documentCaption?: string } | null> {
+    const normalizedPrompt = prompt.toLowerCase().trim();
+    const userNumber = msg.key?.remoteJid || msg.from || 'unknown';
+    
+    try {
+      // Parse period from command
+      const { startDate, endDate, periodLabel } = this.parsePdfPeriod(normalizedPrompt);
+      
+      if (!startDate || !endDate) {
+        const helpText = `📋 Format perintah laporan PDF:\n\n` +
+          `• laporan pdf → bulan ini\n` +
+          `• laporan pdf minggu ini\n` +
+          `• laporan pdf hari ini\n` +
+          `• laporan pdf bulan lalu\n` +
+          `• laporan pdf 2025-08 (YYYY-MM)\n` +
+          `• laporan pdf 2025-08-01 s.d 2025-08-31\n\n` +
+          `💡 Contoh: @lumine laporan pdf bulan ini`;
+        
+        await SupabaseService.saveMessage(userNumber, 'assistant', helpText);
+        return { reply: helpText, log: `PDF help provided` };
+      }
+
+      // Get financial data for PDF
+      const reportData = await this.pdfGeneratorService.getFinancialReportDataByDateRange(
+        pengirim,
+        startDate,
+        endDate,
+        periodLabel
+      );
+
+      if (!reportData.transactions.length) {
+        const noDataText = `📋 Laporan PDF - ${periodLabel}\n\nBelum ada data transaksi pada periode tersebut.\n\nMulai catat pengeluaran Anda untuk mendapatkan laporan yang lengkap!`;
+        await SupabaseService.saveMessage(userNumber, 'assistant', noDataText);
+        return { reply: noDataText, log: `No data for PDF period: ${periodLabel}` };
+      }
+
+      // Generate PDF
+      const pdfBuffer = await this.pdfGeneratorService.generateFinancialReportPdf(reportData);
+
+      // Format total amount
+      const totalFormatted = new Intl.NumberFormat('id-ID', {
+        style: 'currency',
+        currency: 'IDR',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+      }).format(reportData.totalExpense);
+
+      const documentCaption = `📋 *Laporan Keuangan ${periodLabel}*\n\n` +
+        `💰 *Total Pengeluaran:* ${totalFormatted}\n` +
+        `📊 *Jumlah Transaksi:* ${reportData.transactions.length}\n` +
+        `📅 *Periode:* ${periodLabel}\n` +
+        `📄 *Generated:* ${new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}\n\n` +
+        `💡 *Laporan mencakup:*\n` +
+        `• Ringkasan pengeluaran\n` +
+        `• Breakdown per kategori\n` +
+        `• Detail transaksi terbaru\n` +
+        `• Analisis keuangan\n\n` +
+        `📱 *Perintah lainnya:*\n` +
+        `• laporan pdf [hari ini|minggu ini|bulan ini]\n` +
+        `• laporan pdf [bulan lalu|2 minggu lalu]\n` +
+        `• laporan pdf [YYYY-MM] (contoh: 2025-08)`;
+
+      // Save success message to database
+      const successMessage = `Laporan PDF ${periodLabel} berhasil dibuat dengan total ${totalFormatted}`;
+      await SupabaseService.saveMessage(userNumber, 'assistant', successMessage);
+
+      return {
+        reply: null, // No text reply, only document
+        log: `PDF generated for ${periodLabel} - Total: ${totalFormatted}`,
+        document: pdfBuffer,
+        documentCaption
+      };
+
+    } catch (error) {
+      this.logger.error('Error in handlePdfCommand:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Parse PDF period from command text
+   */
+  private parsePdfPeriod(prompt: string): { startDate: string; endDate: string; periodLabel: string } {
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth();
+    const currentDate = today.getDate();
+
+    // Bulan lalu
+    if (prompt.includes('bulan lalu')) {
+      const lastMonth = new Date(currentYear, currentMonth - 1, 1);
+      const endOfLastMonth = new Date(currentYear, currentMonth, 0);
+      
+      return {
+        startDate: lastMonth.toISOString().split('T')[0],
+        endDate: endOfLastMonth.toISOString().split('T')[0],
+        periodLabel: `${this.getMonthName(lastMonth.getMonth())} ${lastMonth.getFullYear()}`
+      };
+    }
+
+    // Minggu lalu
+    if (prompt.includes('minggu lalu')) {
+      const lastWeekEnd = new Date(today);
+      lastWeekEnd.setDate(today.getDate() - today.getDay());
+      const lastWeekStart = new Date(lastWeekEnd);
+      lastWeekStart.setDate(lastWeekEnd.getDate() - 6);
+      
+      return {
+        startDate: lastWeekStart.toISOString().split('T')[0],
+        endDate: lastWeekEnd.toISOString().split('T')[0],
+        periodLabel: 'Minggu Lalu'
+      };
+    }
+
+    // Default case - bulan ini
+    if (!prompt.includes('hari ini') && 
+        !prompt.includes('minggu ini') && 
+        !prompt.match(/\d{4}-\d{2}/) && 
+        !prompt.match(/\d{4}-\d{2}-\d{2}/)) {
+      
+      const startOfMonth = new Date(currentYear, currentMonth, 1);
+      const endOfMonth = new Date(currentYear, currentMonth + 1, 0);
+      
+      return {
+        startDate: startOfMonth.toISOString().split('T')[0],
+        endDate: endOfMonth.toISOString().split('T')[0],
+        periodLabel: `${this.getMonthName(currentMonth)} ${currentYear}`
+      };
+    }
+
+    // Hari ini
+    if (prompt.includes('hari ini')) {
+      const todayStr = today.toISOString().split('T')[0];
+      return {
+        startDate: todayStr,
+        endDate: todayStr,
+        periodLabel: 'Hari Ini'
+      };
+    }
+
+    // Minggu ini
+    if (prompt.includes('minggu ini')) {
+      const startOfWeek = new Date(today);
+      const dayOfWeek = today.getDay();
+      const diff = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+      startOfWeek.setDate(diff);
+      
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+      
+      return {
+        startDate: startOfWeek.toISOString().split('T')[0],
+        endDate: endOfWeek.toISOString().split('T')[0],
+        periodLabel: 'Minggu Ini'
+      };
+    }
+
+    // Format YYYY-MM
+    const monthMatch = prompt.match(/(\d{4})-(\d{2})/);
+    if (monthMatch) {
+      const year = parseInt(monthMatch[1]);
+      const month = parseInt(monthMatch[2]) - 1;
+      
+      const startOfMonth = new Date(year, month, 1);
+      const endOfMonth = new Date(year, month + 1, 0);
+      
+      return {
+        startDate: startOfMonth.toISOString().split('T')[0],
+        endDate: endOfMonth.toISOString().split('T')[0],
+        periodLabel: `${this.getMonthName(month)} ${year}`
+      };
+    }
+
+    // Format range: YYYY-MM-DD s.d YYYY-MM-DD
+    const rangeMatch = prompt.match(/(\d{4}-\d{2}-\d{2})\s+s\.d\s+(\d{4}-\d{2}-\d{2})/);
+    if (rangeMatch) {
+      const fromDate = rangeMatch[1];
+      const toDate = rangeMatch[2];
+      
+      return {
+        startDate: fromDate,
+        endDate: toDate,
+        periodLabel: `${fromDate} s.d ${toDate}`
+      };
+    }
+
+    // Invalid format
+    return { startDate: '', endDate: '', periodLabel: '' };
   }
 }
