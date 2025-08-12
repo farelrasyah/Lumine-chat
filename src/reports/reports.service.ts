@@ -13,27 +13,6 @@ export interface SpendingByCategoryParams {
   pengirim?: string;
 }
 
-export interface TransactionSearchResult {
-  transactions: Array<{
-    id: string;
-    tanggal: string;
-    deskripsi: string;
-    kategori: string;
-    nominal: number;
-    pengirim: string;
-  }>;
-  total: number;
-  count: number;
-}
-
-export interface TransactionSearchParams {
-  keyword: string;
-  pengirim?: string;
-  limit?: number;
-  from?: string;
-  to?: string;
-}
-
 @Injectable()
 export class ReportsService {
   async getSpendingByCategory(params: SpendingByCategoryParams): Promise<SpendingByCategoryResult> {
@@ -91,74 +70,6 @@ export class ReportsService {
     } catch (error) {
       console.error('Error in getSpendingByCategory:', error);
       return { labels: [], values: [], total: 0 };
-    }
-  }
-
-  async searchTransactions(params: TransactionSearchParams): Promise<TransactionSearchResult> {
-    try {
-      const { keyword, pengirim, limit = 20, from, to } = params;
-      
-      // Build query
-      let query = SupabaseService.getClient()
-        .from('transactions')
-        .select('id, tanggal, deskripsi, kategori, nominal, pengirim')
-        .order('tanggal', { ascending: false })
-        .limit(limit);
-
-      // Add pengirim filter if provided
-      if (pengirim) {
-        query = query.eq('pengirim', pengirim);
-      }
-
-      // Add date range filter if provided
-      if (from) {
-        query = query.gte('tanggal', from);
-      }
-      if (to) {
-        query = query.lte('tanggal', to);
-      }
-
-      const { data, error } = await query;
-
-      if (error) {
-        console.error('Error searching transactions:', error);
-        return { transactions: [], total: 0, count: 0 };
-      }
-
-      if (!data || data.length === 0) {
-        return { transactions: [], total: 0, count: 0 };
-      }
-
-      // Filter by keyword (case-insensitive search in deskripsi and kategori)
-      const keywordLower = keyword.toLowerCase();
-      const filteredTransactions = data.filter(transaction => {
-        const deskripsi = (transaction.deskripsi || '').toLowerCase();
-        const kategori = (transaction.kategori || '').toLowerCase();
-        
-        return deskripsi.includes(keywordLower) || kategori.includes(keywordLower);
-      });
-
-      // Calculate total amount
-      const total = filteredTransactions.reduce((sum, transaction) => {
-        return sum + Math.abs(transaction.nominal);
-      }, 0);
-
-      return {
-        transactions: filteredTransactions.map(t => ({
-          id: t.id,
-          tanggal: t.tanggal,
-          deskripsi: t.deskripsi || '',
-          kategori: t.kategori || 'Tidak Terkategorisasi',
-          nominal: t.nominal,
-          pengirim: t.pengirim || ''
-        })),
-        total,
-        count: filteredTransactions.length
-      };
-
-    } catch (error) {
-      console.error('Error in searchTransactions:', error);
-      return { transactions: [], total: 0, count: 0 };
     }
   }
 }

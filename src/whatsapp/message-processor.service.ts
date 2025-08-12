@@ -12,10 +12,8 @@ import { SheetService } from '../sheet/sheet.service';
 import { FinanceQAService } from '../finance/finance-qa.service';
 import { BudgetManagementService } from '../finance/budget-management.service';
 import { FinancialInsightService } from '../finance/financial-insight.service';
-import { SavingsSimulationService } from '../finance/savings-simulation.service';
 import { ReportsService } from '../reports/reports.service';
 import { ChartsService } from '../charts/charts.service';
-import { PdfGeneratorService } from '../pdf/pdf-generator.service';
 
 @Injectable()
 export class MessageProcessorService {
@@ -28,10 +26,8 @@ export class MessageProcessorService {
     private readonly financeQAService: FinanceQAService,
     private readonly budgetService: BudgetManagementService,
     private readonly insightService: FinancialInsightService,
-    private readonly savingsService: SavingsSimulationService,
     private readonly reportsService: ReportsService,
     private readonly chartsService: ChartsService,
-    private readonly pdfService: PdfGeneratorService,
   ) {}
 
   async processMessage(msg: any): Promise<{ reply?: string | null; log: string; image?: Buffer; imageCaption?: string }> {
@@ -96,70 +92,6 @@ export class MessageProcessorService {
       }
     }
 
-    // === COMMAND DETECTION FIRST (BEFORE TRANSACTION PARSING) ===
-    
-    // Check for chart commands FIRST
-    if (this.isChartCommand(prompt)) {
-      try {
-        const chartResult = await this.handleChartCommand(prompt, pengirim, msg);
-        if (chartResult) {
-          return chartResult;
-        }
-      } catch (error) {
-        this.logger.error('Error processing chart command:', error);
-        const errorReply = 'Maaf, terjadi kesalahan saat membuat chart pengeluaran.';
-        await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
-        return { reply: errorReply, log: `Chart Error: ${error}` };
-      }
-    }
-
-    // Check for search commands
-    if (this.isSearchCommand(prompt)) {
-      try {
-        const searchResult = await this.handleSearchCommand(prompt, pengirim, msg);
-        if (searchResult) {
-          return searchResult;
-        }
-      } catch (error) {
-        this.logger.error('Error processing search command:', error);
-        const errorReply = 'Maaf, terjadi kesalahan saat mencari transaksi.';
-        await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
-        return { reply: errorReply, log: `Search Error: ${error}` };
-      }
-    }
-
-    // Check for savings simulation commands
-    if (this.isSavingsSimulationCommand(prompt)) {
-      try {
-        this.logger.log('DEBUG: Savings simulation command detected');
-        const simulationResult = await this.handleSavingsSimulationCommand(prompt, pengirim, msg);
-        if (simulationResult) {
-          return simulationResult;
-        }
-      } catch (error) {
-        this.logger.error('Error processing savings simulation:', error);
-        const errorReply = 'Maaf, terjadi kesalahan saat membuat simulasi tabungan.';
-        await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
-        return { reply: errorReply, log: `Savings Simulation Error: ${error}` };
-      }
-    }
-
-    // Check for PDF report commands
-    if (this.isPdfReportCommand(prompt)) {
-      try {
-        this.logger.log('DEBUG: PDF report command detected');
-        const pdfResult = await this.handlePdfReportCommand(prompt, pengirim, msg);
-        if (pdfResult) {
-          return pdfResult;
-        }
-      } catch (error) {
-        this.logger.error('Error processing PDF report:', error);
-        const errorReply = 'Maaf, terjadi kesalahan saat membuat laporan PDF.';
-        await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
-        return { reply: errorReply, log: `PDF Report Error: ${error}` };
-      }
-    }
-
     // --- Integrasi parser, Supabase & Google Sheets ---
     const parsed = await this.parserService.parseMessage(prompt, pengirim);
     if (parsed && parsed.nominal && parsed.nominal > 0) {
@@ -217,6 +149,21 @@ export class MessageProcessorService {
       // Format untuk prompt ke AI ala ChatGPT API
       const chatContext = messages.map((m: any) => ({ role: m.role, content: m.content }));
       chatContext.push({ role: 'user', content: prompt });
+
+      // Check for chart commands FIRST (before spending analysis)
+      if (this.isChartCommand(prompt)) {
+        try {
+          const chartResult = await this.handleChartCommand(prompt, pengirim, msg);
+          if (chartResult) {
+            return chartResult;
+          }
+        } catch (error) {
+          this.logger.error('Error processing chart command:', error);
+          const errorReply = 'Maaf, terjadi kesalahan saat membuat chart pengeluaran.';
+          await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
+          return { reply: errorReply, log: `Chart Error: ${error}` };
+        }
+      }
 
       // === FITUR ANALISIS PENGELUARAN (BOROS/HEMAT) ===
       if (this.isSpendingAnalysisQuestion(prompt)) {
@@ -617,16 +564,6 @@ export class MessageProcessorService {
            normalizedPrompt.includes('grafik spending');
   }
 
-  private isSearchCommand(prompt: string): boolean {
-    const normalizedPrompt = prompt.toLowerCase();
-    return normalizedPrompt.includes('cari transaksi') || 
-           normalizedPrompt.includes('cari pengeluaran') ||
-           normalizedPrompt.includes('search transaksi') ||
-           normalizedPrompt.includes('search pengeluaran') ||
-           normalizedPrompt.startsWith('cari ') ||
-           normalizedPrompt.startsWith('search ');
-  }
-
   /**
    * Handle chart-related commands
    */
@@ -670,10 +607,10 @@ export class MessageProcessorService {
         labels: spendingData.labels,
         values: spendingData.values,
         title: chartTitle,
-        highlightMax: false, // Professional look without highlights
+        highlightMax: true,
         doughnut: true,
-        width: 1400,
-        height: 900
+        width: 1200,
+        height: 700
       });
 
       // Format total amount
@@ -684,37 +621,32 @@ export class MessageProcessorService {
         maximumFractionDigits: 0
       }).format(spendingData.total);
 
-      // Create professional breakdown for caption (top categories only)
-      const topCategories = spendingData.labels
-        .map((label, index) => ({
-          label,
-          value: spendingData.values[index],
-          percentage: ((spendingData.values[index] / spendingData.total) * 100)
-        }))
-        .sort((a, b) => b.value - a.value)
-        .slice(0, 4); // Top 4 categories
-
-      const categoryBreakdown = topCategories
-        .map(cat => {
+      // Create detailed breakdown for caption
+      const categoryBreakdown = spendingData.labels
+        .map((label, index) => {
+          const value = spendingData.values[index];
+          const percentage = ((value / spendingData.total) * 100).toFixed(1);
           const formatted = new Intl.NumberFormat('id-ID', {
             style: 'currency',
             currency: 'IDR',
             minimumFractionDigits: 0,
             maximumFractionDigits: 0
-          }).format(cat.value);
-          return `  ▪️ ${cat.label}: ${formatted} (${cat.percentage.toFixed(1)}%)`;
+          }).format(value);
+          return `  • ${label}: ${formatted} (${percentage}%)`;
         })
+        .slice(0, 5) // Show top 5 categories
         .join('\n');
 
-      const imageCaption = `🎯 *ANALISIS PENGELUARAN ${periodLabel.toUpperCase()}*\n\n` +
-        `💰 *Total:* ${totalFormatted}\n` +
-        `📊 *Kategori Terbesar:*\n${categoryBreakdown}\n` +
-        `${spendingData.labels.length > 4 ? `  ▪️ +${spendingData.labels.length - 4} kategori lainnya` : ''}\n\n` +
-        `📈 *Quick Insight:* ${topCategories[0] ? `${topCategories[0].label} mendominasi (${topCategories[0].percentage.toFixed(1)}%)` : 'Data tersedia'}\n\n` +
-        `⚡ *Quick Commands:*\n` +
-        `• \`chart pengeluaran minggu ini\`\n` +
-        `• \`chart pengeluaran 2025-08\`\n` +
-        `• \`analisis pengeluaran ${periodLabel.toLowerCase()}\``;
+      const imageCaption = `📊 *Chart Pengeluaran ${periodLabel}*\n\n` +
+        `💰 *Total Pengeluaran:* ${totalFormatted}\n\n` +
+        `� *Breakdown per Kategori:*\n${categoryBreakdown}` +
+        `${spendingData.labels.length > 5 ? '\n  • ...' : ''}\n\n` +
+        `⏰ Periode: ${periodLabel}\n` +
+        `📅 Generated: ${new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}\n\n` +
+        `💡 *Perintah lainnya:*\n` +
+        `• chart pengeluaran [hari ini|minggu ini|bulan ini]\n` +
+        `• chart pengeluaran [YYYY-MM] (contoh: 2025-08)\n` +
+        `• chart pengeluaran [tgl mulai] s.d [tgl akhir]`;
 
       // Save success message to database
       const successMessage = `Chart pengeluaran ${periodLabel} berhasil dibuat dengan total ${totalFormatted}`;
@@ -729,94 +661,6 @@ export class MessageProcessorService {
 
     } catch (error) {
       this.logger.error('Error in handleChartCommand:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Handle search-related commands
-   */
-  private async handleSearchCommand(prompt: string, pengirim: string, msg: any): Promise<{ reply: string | null; log: string } | null> {
-    const normalizedPrompt = prompt.toLowerCase().trim();
-    const userNumber = msg.key?.remoteJid || msg.from || 'unknown';
-    
-    try {
-      // Extract keyword from various search patterns
-      let keyword = '';
-      
-      if (normalizedPrompt.includes('cari transaksi')) {
-        keyword = normalizedPrompt.replace('cari transaksi', '').trim();
-      } else if (normalizedPrompt.includes('cari pengeluaran')) {
-        keyword = normalizedPrompt.replace('cari pengeluaran', '').trim();
-      } else if (normalizedPrompt.includes('search transaksi')) {
-        keyword = normalizedPrompt.replace('search transaksi', '').trim();
-      } else if (normalizedPrompt.includes('search pengeluaran')) {
-        keyword = normalizedPrompt.replace('search pengeluaran', '').trim();
-      } else {
-        // Try to extract keyword from "cari [keyword]" pattern
-        const match = normalizedPrompt.match(/cari\s+(.+)/);
-        if (match) {
-          keyword = match[1].trim();
-        } else {
-          // If no specific pattern, use whole prompt as keyword
-          keyword = normalizedPrompt;
-        }
-      }
-
-      // Remove common words that might interfere
-      keyword = keyword.replace(/untuk|yang|dengan|dari|pada|di|ke|dalam|.*lumine.*|bot/gi, '').trim();
-      
-      if (!keyword || keyword.length < 2) {
-        const reply = 'Silakan berikan kata kunci untuk pencarian. Contoh:\n• "cari kopi"\n• "cari transaksi makanan"\n• "cari pengeluaran transport"';
-        await SupabaseService.saveMessage(userNumber, 'assistant', reply);
-        return { reply, log: 'Search failed: no keyword provided' };
-      }
-
-      // Search transactions
-      const searchResult = await this.reportsService.searchTransactions({
-        keyword,
-        pengirim,
-        limit: 15
-      });
-
-      if (searchResult.count === 0) {
-        const reply = `🔍 Tidak ditemukan transaksi dengan kata kunci "${keyword}".\n\nCoba gunakan kata kunci lain seperti nama tempat, jenis pengeluaran, atau kategori.`;
-        await SupabaseService.saveMessage(userNumber, 'assistant', reply);
-        return { reply, log: `Search completed: no results for "${keyword}"` };
-      }
-
-      // Format search results
-      let reply = `🔍 *HASIL PENCARIAN TRANSAKSI*\n`;
-      reply += `Kata kunci: *"${keyword}"*\n`;
-      reply += `Ditemukan: *${searchResult.count} transaksi*\n`;
-      reply += `Total nilai: *Rp ${searchResult.total.toLocaleString('id-ID')}*\n\n`;
-
-      searchResult.transactions.forEach((transaction, index) => {
-        const date = new Date(transaction.tanggal).toLocaleDateString('id-ID', {
-          day: '2-digit',
-          month: 'short',
-          year: 'numeric'
-        });
-        
-        reply += `*${index + 1}.* ${transaction.deskripsi}\n`;
-        reply += `📅 ${date} • 💰 Rp ${Math.abs(transaction.nominal).toLocaleString('id-ID')}\n`;
-        reply += `📂 ${transaction.kategori}\n\n`;
-      });
-
-      if (searchResult.count > 15) {
-        reply += `_Menampilkan 15 transaksi terbaru. Total ${searchResult.count} transaksi ditemukan._`;
-      }
-
-      // Save search result to database
-      await SupabaseService.saveMessage(userNumber, 'assistant', reply);
-
-      return {
-        reply,
-        log: `Search completed: ${searchResult.count} results for "${keyword}"`
-      };
-
-    } catch (error) {
-      this.logger.error('Error in handleSearchCommand:', error);
       throw error;
     }
   }
@@ -1700,507 +1544,6 @@ export class MessageProcessorService {
     return `📊 Analisis Pengeluaran ${this.getTimeframeName(timeframe)}\n\n` +
            `💰 Tidak ada pengeluaran tercatat untuk periode ${timeframeName} ini.\n\n` +
            `💡 Tips: Pastikan untuk mencatat semua transaksi agar analisis lebih akurat!`;
-  }
-
-  /**
-   * Check if message is a savings simulation command
-   */
-  private isSavingsSimulationCommand(prompt: string): boolean {
-    const savingsPatterns = [
-      /simulasi.*tabungan/i,
-      /simulasi.*nabung/i,
-      /tabungan.*simulasi/i,
-      /nabung.*simulasi/i,
-      /hitung.*tabungan/i,
-      /proyeksi.*tabungan/i,
-      /simulasi.*menabung/i,
-      /planning.*tabungan/i,
-      /rencana.*tabungan/i,
-      /target.*tabungan/i,
-      /tabungan.*target/i,
-      /simulasi.*saving/i,
-      // Tambahan pattern untuk menangkap "ingin nabung", "mau nabung", dll
-      /ingin.*nabung.*\d+/i,
-      /mau.*nabung.*\d+/i,
-      /pengen.*nabung.*\d+/i,
-      /rencana.*nabung.*\d+/i,
-      /planning.*nabung.*\d+/i,
-      /target.*nabung.*\d+/i,
-      /nabung.*target.*\d+/i,
-      /ingin.*menabung.*\d+/i,
-      /mau.*menabung.*\d+/i,
-      /berapa.*lama.*nabung/i,
-      /kapan.*bisa.*nabung/i
-    ];
-
-    return savingsPatterns.some(pattern => pattern.test(prompt));
-  }
-
-  /**
-   * Handle savings simulation command
-   */
-  private async handleSavingsSimulationCommand(prompt: string, pengirim: string, msg: any): Promise<{ reply: string; log: string }> {
-    const userNumber = msg.key?.remoteJid || msg.from || 'unknown';
-    
-    try {
-      // Parse simulation parameters from prompt
-      const params = this.parseSavingsParameters(prompt);
-      
-      if (!params.monthlyAmount && !params.targetAmount) {
-        const helpText = this.getSavingsSimulationHelp();
-        await SupabaseService.saveMessage(userNumber, 'assistant', helpText);
-        return { reply: helpText, log: 'Savings simulation help provided' };
-      }
-
-      // Run simulation
-      let response = '';
-      
-      if (params.monthlyAmount && !params.targetAmount) {
-        // Simulation based on monthly amount
-        const simulation = await this.savingsService.runSavingsSimulation({
-          monthlyAmount: params.monthlyAmount,
-          months: params.months || 12,
-          interestRate: params.interestRate || 3.5,
-          userId: userNumber
-        });
-        
-        response = this.formatSavingsSimulationResponse(simulation, params);
-        
-      } else if (params.targetAmount) {
-        // Calculate required monthly savings for target
-        const calculation = await this.savingsService.calculateTargetSavings(
-          params.targetAmount,
-          params.months || 12,
-          params.interestRate || 3.5,
-          userNumber
-        );
-        
-        response = this.formatTargetSavingsResponse(calculation, params);
-      }
-
-      await SupabaseService.saveMessage(userNumber, 'assistant', response);
-      return { reply: response, log: `Savings simulation provided for ${pengirim}` };
-      
-    } catch (error) {
-      this.logger.error('Error in savings simulation:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Parse savings simulation parameters from prompt
-   */
-  private parseSavingsParameters(prompt: string): {
-    monthlyAmount?: number;
-    targetAmount?: number;
-    months?: number;
-    interestRate?: number;
-  } {
-    const params: any = {};
-    
-    // Extract monthly amount patterns
-    const monthlyPatterns = [
-      /(?:menabung|nabung|sisihkan|simpan).*?(\d+(?:\.\d+)?)\s*(?:juta|jt)/i,
-      /(?:menabung|nabung|sisihkan|simpan).*?(\d+(?:\.\d+)?)\s*(?:ribu|rb)/i,
-      /(?:menabung|nabung|sisihkan|simpan).*?(\d+(?:[,.]?\d+)*)/i,
-      /(\d+(?:\.\d+)?)\s*(?:juta|jt).*?(?:per|setiap|tiap)\s*bulan/i,
-      /(\d+(?:\.\d+)?)\s*(?:ribu|rb).*?(?:per|setiap|tiap)\s*bulan/i,
-      /(\d+(?:[,.]?\d+)*).*?(?:per|setiap|tiap)\s*bulan/i
-    ];
-
-    for (const pattern of monthlyPatterns) {
-      const match = prompt.match(pattern);
-      if (match) {
-        let amount = parseFloat(match[1].replace(/[,.]/g, ''));
-        
-        // Convert based on unit
-        if (prompt.includes('juta') || prompt.includes('jt')) {
-          amount = amount * 1000000;
-        } else if (prompt.includes('ribu') || prompt.includes('rb')) {
-          amount = amount * 1000;
-        }
-        
-        params.monthlyAmount = amount;
-        break;
-      }
-    }
-
-    // Extract target amount patterns
-    const targetPatterns = [
-      /(?:target|tujuan|capai).*?(\d+(?:\.\d+)?)\s*(?:juta|jt)/i,
-      /(?:target|tujuan|capai).*?(\d+(?:\.\d+)?)\s*(?:ribu|rb)/i,
-      /(?:target|tujuan|capai).*?(\d+(?:[,.]?\d+)*)/i,
-      /(\d+(?:\.\d+)?)\s*(?:juta|jt).*?(?:target|tujuan)/i,
-      /(\d+(?:\.\d+)?)\s*(?:ribu|rb).*?(?:target|tujuan)/i
-    ];
-
-    for (const pattern of targetPatterns) {
-      const match = prompt.match(pattern);
-      if (match) {
-        let amount = parseFloat(match[1].replace(/[,.]/g, ''));
-        
-        if (prompt.includes('juta') || prompt.includes('jt')) {
-          amount = amount * 1000000;
-        } else if (prompt.includes('ribu') || prompt.includes('rb')) {
-          amount = amount * 1000;
-        }
-        
-        params.targetAmount = amount;
-        break;
-      }
-    }
-
-    // Extract months
-    const monthsMatch = prompt.match(/(\d+)\s*(?:bulan|months?)/i);
-    if (monthsMatch) {
-      params.months = parseInt(monthsMatch[1]);
-    }
-
-    // Extract interest rate
-    const interestMatch = prompt.match(/(\d+(?:\.\d+)?)\s*(?:%|persen|bunga)/i);
-    if (interestMatch) {
-      params.interestRate = parseFloat(interestMatch[1]);
-    }
-
-    return params;
-  }
-
-  /**
-   * Format savings simulation response
-   */
-  private formatSavingsSimulationResponse(simulation: any, params: any): string {
-    const { projections, summary, recommendations } = simulation;
-    
-    let response = `💰 SIMULASI TABUNGAN\n\n`;
-    response += `📊 Parameter:\n`;
-    response += `• Tabungan bulanan: ${this.formatRupiah(params.monthlyAmount)}\n`;
-    response += `• Periode: ${params.months || 12} bulan\n`;
-    response += `• Bunga: ${params.interestRate || 3.5}% per tahun\n\n`;
-    
-    response += `📈 HASIL SIMULASI:\n`;
-    response += `• Total setoran: ${this.formatRupiah(summary.totalDeposits)}\n`;
-    response += `• Total bunga: ${this.formatRupiah(summary.totalInterest)}\n`;
-    response += `• Saldo akhir: ${this.formatRupiah(summary.finalBalance)}\n\n`;
-    
-    // Show key milestones (every 3 months or significant milestones)
-    response += `🎯 PROYEKSI BERKALA:\n`;
-    const milestones = projections.filter((p: any, i: number) => 
-      i === 2 || i === 5 || i === 8 || i === projections.length - 1
-    );
-    
-    milestones.forEach((milestone: any) => {
-      response += `• Bulan ${milestone.month}: ${this.formatRupiah(milestone.totalBalance)}\n`;
-    });
-    
-    if (recommendations.length > 0) {
-      response += `\n💡 REKOMENDASI:\n`;
-      recommendations.slice(0, 3).forEach((rec: string) => {
-        response += `${rec}\n`;
-      });
-    }
-    
-    return response;
-  }
-
-  /**
-   * Format target savings response
-   */
-  private formatTargetSavingsResponse(calculation: any, params: any): string {
-    const { monthlyRequired, totalDeposits, totalInterest, feasibilityAnalysis } = calculation;
-    
-    let response = `🎯 PERHITUNGAN TARGET TABUNGAN\n\n`;
-    response += `📊 Parameter:\n`;
-    response += `• Target: ${this.formatRupiah(params.targetAmount)}\n`;
-    response += `• Periode: ${params.months || 12} bulan\n`;
-    response += `• Bunga: ${params.interestRate || 3.5}% per tahun\n\n`;
-    
-    response += `💰 HASIL PERHITUNGAN:\n`;
-    response += `• Nabung per bulan: ${this.formatRupiah(monthlyRequired)}\n`;
-    response += `• Total setoran: ${this.formatRupiah(totalDeposits)}\n`;
-    response += `• Total bunga: ${this.formatRupiah(totalInterest)}\n\n`;
-    
-    response += `📊 ANALISIS KELAYAKAN:\n`;
-    response += `${feasibilityAnalysis}\n\n`;
-    
-    response += `💡 TIPS:\n`;
-    response += `• Buat auto-debit untuk konsistensi\n`;
-    response += `• Pilih instrumen dengan bunga lebih tinggi\n`;
-    response += `• Review dan sesuaikan target secara berkala`;
-    
-    return response;
-  }
-
-  /**
-   * Get savings simulation help text
-   */
-  private getSavingsSimulationHelp(): string {
-    return `💰 SIMULASI TABUNGAN - PANDUAN PENGGUNAAN\n\n` +
-           `🎯 Format perintah:\n\n` +
-           `1️⃣ Simulasi berdasarkan tabungan bulanan:\n` +
-           `"simulasi tabungan 500 ribu per bulan"\n` +
-           `"simulasi nabung 1 juta per bulan 12 bulan"\n\n` +
-           `2️⃣ Hitung tabungan untuk mencapai target:\n` +
-           `"target tabungan 10 juta dalam 12 bulan"\n` +
-           `"simulasi tabungan target 50 juta 24 bulan"\n\n` +
-           `📝 Contoh lengkap:\n` +
-           `• "simulasi tabungan 300 ribu per bulan"\n` +
-           `• "target tabungan 5 juta dalam 10 bulan"\n` +
-           `• "simulasi nabung 1 juta 18 bulan bunga 4%"\n\n` +
-           `💡 Fitur yang didapat:\n` +
-           `✅ Proyeksi saldo bulanan\n` +
-           `✅ Perhitungan bunga compound\n` +
-           `✅ Analisis kelayakan personal\n` +
-           `✅ Rekomendasi berdasarkan pengeluaran Anda`;
-  }
-
-  /**
-   * Format rupiah currency
-   */
-  private formatRupiah(amount: number): string {
-    return new Intl.NumberFormat('id-ID', {
-      style: 'currency',
-      currency: 'IDR',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0
-    }).format(amount);
-  }
-
-  /**
-   * Check if message is a PDF report command
-   */
-  private isPdfReportCommand(prompt: string): boolean {
-    const pdfPatterns = [
-      /laporan.*pdf/i,
-      /pdf.*laporan/i,
-      /download.*laporan/i,
-      /unduh.*laporan/i,
-      /laporan.*keuangan.*pdf/i,
-      /pdf.*keuangan/i,
-      /export.*pdf/i,
-      /buat.*laporan.*pdf/i,
-      /generate.*laporan/i,
-      /laporan.*pengeluaran.*pdf/i,
-      /cetak.*laporan/i,
-      /print.*laporan/i,
-      /save.*laporan/i,
-      /laporan.*finansial.*pdf/i
-    ];
-
-    return pdfPatterns.some(pattern => pattern.test(prompt));
-  }
-
-  /**
-   * Handle PDF report command
-   */
-  private async handlePdfReportCommand(prompt: string, pengirim: string, msg: any): Promise<{ reply?: string; log: string; image?: Buffer; imageCaption?: string } | null> {
-    const userNumber = msg.key?.remoteJid || msg.from || 'unknown';
-    
-    try {
-      // Enhanced period detection
-      const periodInfo = this.parsePdfReportPeriod(prompt);
-      
-      this.logger.log(`Generating PDF report for period: ${periodInfo.type}, range: ${periodInfo.startDate} to ${periodInfo.endDate}`);
-
-      // Get financial report data with custom date range
-      const reportData = await this.pdfService.getFinancialReportDataByDateRange(
-        pengirim, 
-        periodInfo.startDate, 
-        periodInfo.endDate,
-        periodInfo.label
-      );
-      
-      // Generate PDF with period-specific filename
-      const pdfBuffer = await this.pdfService.generateFinancialReportPdf(reportData);
-      const filename = this.generatePdfFilename(periodInfo.label);
-
-      const caption = `📋 **LAPORAN KEUANGAN PDF**\n\n` +
-        `📅 **Periode**: ${reportData.period}\n` +
-        `💰 **Total Pengeluaran**: ${this.formatRupiah(reportData.totalExpense)}\n` +
-        `🧾 **Jumlah Transaksi**: ${reportData.transactions.length}\n` +
-        `📊 **Kategori**: ${reportData.categoryBreakdown.length}\n\n` +
-        `📎 File: ${filename}\n` +
-        `📄 Berisi: Ringkasan, breakdown kategori, detail transaksi\n\n` +
-        `💼 Siap untuk arsip atau presentasi!`;
-
-      // Save messages
-      await SupabaseService.saveMessage(userNumber, 'user', prompt);
-      await SupabaseService.saveMessage(userNumber, 'assistant', `Laporan keuangan PDF untuk ${periodInfo.label} telah dibuat`);
-
-      return {
-        image: pdfBuffer,
-        imageCaption: caption,
-        log: `PDF Report generated for ${pengirim} - Period: ${periodInfo.label}, Transactions: ${reportData.transactions.length}, Total: ${this.formatRupiah(reportData.totalExpense)}`
-      };
-
-    } catch (error) {
-      this.logger.error('Error generating PDF report:', error);
-      
-      const errorReply = `❌ **Maaf, tidak bisa membuat laporan PDF**\n\n` +
-        `🔍 **Kemungkinan penyebab**:\n` +
-        `• Belum ada data transaksi untuk periode ini\n` +
-        `• Gangguan sistem sementara\n\n` +
-        `💡 **Solusi**:\n` +
-        `• Coba lagi beberapa saat\n` +
-        `• Pastikan sudah ada transaksi tercatat\n` +
-        `• Gunakan period yang berbeda`;
-
-      await SupabaseService.saveMessage(userNumber, 'user', prompt);
-      await SupabaseService.saveMessage(userNumber, 'assistant', errorReply);
-
-      return {
-        reply: errorReply,
-        log: `PDF Report Error for ${pengirim}: ${error.message}`
-      };
-    }
-  }
-
-  /**
-   * Parse PDF report period with support for relative and absolute dates
-   */
-  private parsePdfReportPeriod(prompt: string): {
-    type: string;
-    startDate: string;
-    endDate: string;
-    label: string;
-  } {
-    const today = new Date();
-    const currentYear = today.getFullYear();
-    const currentMonth = today.getMonth();
-    
-    // Relative periods - "lalu" patterns
-    if (/bulan\s+lalu/i.test(prompt)) {
-      const lastMonth = new Date(currentYear, currentMonth - 1, 1);
-      const lastMonthEnd = new Date(currentYear, currentMonth, 0);
-      return {
-        type: 'last_month',
-        startDate: lastMonth.toISOString().split('T')[0],
-        endDate: lastMonthEnd.toISOString().split('T')[0],
-        label: `${this.getMonthName(lastMonth.getMonth())} ${lastMonth.getFullYear()}`
-      };
-    }
-    
-    if (/minggu\s+lalu/i.test(prompt)) {
-      const lastWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-      const startOfLastWeek = new Date(lastWeek);
-      startOfLastWeek.setDate(lastWeek.getDate() - lastWeek.getDay() + 1); // Monday
-      const endOfLastWeek = new Date(startOfLastWeek);
-      endOfLastWeek.setDate(startOfLastWeek.getDate() + 6); // Sunday
-      
-      return {
-        type: 'last_week',
-        startDate: startOfLastWeek.toISOString().split('T')[0],
-        endDate: endOfLastWeek.toISOString().split('T')[0],
-        label: `Minggu Lalu (${startOfLastWeek.getDate()}-${endOfLastWeek.getDate()} ${this.getMonthName(startOfLastWeek.getMonth())})`
-      };
-    }
-
-    if (/dua\s+bulan\s+lalu|2\s+bulan\s+lalu/i.test(prompt)) {
-      const twoMonthsAgo = new Date(currentYear, currentMonth - 2, 1);
-      const twoMonthsAgoEnd = new Date(currentYear, currentMonth - 1, 0);
-      return {
-        type: 'two_months_ago',
-        startDate: twoMonthsAgo.toISOString().split('T')[0],
-        endDate: twoMonthsAgoEnd.toISOString().split('T')[0],
-        label: `${this.getMonthName(twoMonthsAgo.getMonth())} ${twoMonthsAgo.getFullYear()}`
-      };
-    }
-
-    // Absolute periods - specific months/years
-    const absoluteMonthMatch = prompt.match(/(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)\s+(\d{4})/i);
-    if (absoluteMonthMatch) {
-      const monthName = absoluteMonthMatch[1].toLowerCase();
-      const year = parseInt(absoluteMonthMatch[2]);
-      const monthIndex = this.getMonthIndex(monthName);
-      
-      const startDate = new Date(year, monthIndex, 1);
-      const endDate = new Date(year, monthIndex + 1, 0);
-      
-      return {
-        type: 'absolute_month',
-        startDate: startDate.toISOString().split('T')[0],
-        endDate: endDate.toISOString().split('T')[0],
-        label: `${this.getMonthName(monthIndex)} ${year}`
-      };
-    }
-
-    // Date ranges - "1-15 Juni 2025" format
-    const dateRangeMatch = prompt.match(/(\d{1,2})\s*[-–]\s*(\d{1,2})\s+(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)\s+(\d{4})/i);
-    if (dateRangeMatch) {
-      const startDay = parseInt(dateRangeMatch[1]);
-      const endDay = parseInt(dateRangeMatch[2]);
-      const monthName = dateRangeMatch[3].toLowerCase();
-      const year = parseInt(dateRangeMatch[4]);
-      const monthIndex = this.getMonthIndex(monthName);
-      
-      const startDate = new Date(year, monthIndex, startDay);
-      const endDate = new Date(year, monthIndex, endDay);
-      
-      return {
-        type: 'date_range',
-        startDate: startDate.toISOString().split('T')[0],
-        endDate: endDate.toISOString().split('T')[0],
-        label: `${startDay}-${endDay} ${this.getMonthName(monthIndex)} ${year}`
-      };
-    }
-
-    // Current period patterns
-    if (/hari.*ini|today|harian/i.test(prompt)) {
-      const todayStr = today.toISOString().split('T')[0];
-      return {
-        type: 'today',
-        startDate: todayStr,
-        endDate: todayStr,
-        label: 'Hari Ini'
-      };
-    }
-
-    if (/minggu.*ini|week|mingguan/i.test(prompt)) {
-      const startOfWeek = new Date(today);
-      const dayOfWeek = today.getDay();
-      const diff = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
-      startOfWeek.setDate(diff);
-      
-      const endOfWeek = new Date(startOfWeek);
-      endOfWeek.setDate(startOfWeek.getDate() + 6);
-      
-      return {
-        type: 'this_week',
-        startDate: startOfWeek.toISOString().split('T')[0],
-        endDate: endOfWeek.toISOString().split('T')[0],
-        label: 'Minggu Ini'
-      };
-    }
-
-    // Default to current month
-    const startOfMonth = new Date(currentYear, currentMonth, 1);
-    const endOfMonth = new Date(currentYear, currentMonth + 1, 0);
-    
-    return {
-      type: 'current_month',
-      startDate: startOfMonth.toISOString().split('T')[0],
-      endDate: endOfMonth.toISOString().split('T')[0],
-      label: `${this.getMonthName(currentMonth)} ${currentYear}`
-    };
-  }
-
-  /**
-   * Get month index from Indonesian month name
-   */
-  private getMonthIndex(monthName: string): number {
-    const months = {
-      'januari': 0, 'februari': 1, 'maret': 2, 'april': 3,
-      'mei': 4, 'juni': 5, 'juli': 6, 'agustus': 7,
-      'september': 8, 'oktober': 9, 'november': 10, 'desember': 11
-    };
-    return months[monthName.toLowerCase()] || 0;
-  }
-
-  /**
-   * Generate filename for PDF based on period
-   */
-  private generatePdfFilename(periodLabel: string): string {
-    const cleanLabel = periodLabel.replace(/\s/g, '_').replace(/[^\w-]/g, '');
-    return `Laporan_Keuangan_${cleanLabel}.pdf`;
   }
 
   /**
